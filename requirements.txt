@@ -1,0 +1,24 @@
+# Autodialer Pro - Dependencies
+# ==============================
+
+# Async HTTP
+aiohttp>=3.9.0
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Text-to-Speech
+gtts>=2.4.0
+edge-tts>=6.1.0
+
+# Audio processing
+pydub>=0.25.1
+
+# Environment
+python-dotenv>=1.0.0
+
+# Logging
+colorlog>=6.8.0
+
+# Typing
+typing-extensions>=4.9.0

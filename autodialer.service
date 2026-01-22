@@ -1,0 +1,33 @@
+[Unit]
+Description=AutoDialer Pro - Nonbor Order Notification Service
+After=network.target asterisk.service
+Wants=asterisk.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/autodialer
+ExecStart=/usr/bin/python3 /opt/autodialer/autodialer_v2_linux.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment fayldan credentials yuklash (XAVFSIZ)
+EnvironmentFile=/opt/autodialer/.env
+
+# Standart sozlamalar
+Environment="PYTHONUNBUFFERED=1"
+Environment="TTS_AUDIO_CACHE=/var/lib/autodialer/audio/cache"
+Environment="TTS_ASTERISK_PATH=/usr/share/asterisk/sounds/custom"
+Environment="SARKOR_ENDPOINT=sarkor-endpoint"
+Environment="SIP_SERVER=well-tech.sip.uz"
+Environment="WAIT_BEFORE_CALL=90"
+Environment="MAX_RETRIES=2"
+Environment="TELEGRAM_ALERT_TIME=150"
+Environment="POLLING_INTERVAL=3"
+Environment="CALL_WAIT_TIME=30"
+
+[Install]
+WantedBy=multi-user.target
