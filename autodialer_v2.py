@@ -431,15 +431,13 @@ def format_seller_orders_message(seller_orders, call_attempts=0):
     # Buyurtmalar bo'limi
     text += "\n\n<b>━━━ BUYURTMALAR ━━━</b>\n"
 
-    for i, order in enumerate(orders, 1):
+    for i, order in enumerate(orders[:10], 1):
         order_number = order.get("order_number") or order.get("lead_id", "N/A")
         client_name = order.get("client_name") or order.get("mijoz_nomi", "Noma'lum")
         client_phone = order.get("client_phone") or order.get("mijoz_tel", "Noma'lum")
         # Telefon raqamini formatlash
         if client_phone and not str(client_phone).startswith('+'):
             client_phone = '+' + str(client_phone)
-        product_name = order.get("product_name") or order.get("mahsulot", "Noma'lum")
-        quantity = order.get("quantity") or order.get("miqdor", 1)
         price = order.get("price") or order.get("narx", 0)
 
         # Narxni formatlash
@@ -452,12 +450,31 @@ def format_seller_orders_message(seller_orders, call_attempts=0):
 
         text += f"""
 <b>{i}. Buyurtma #{order_number}</b>
-   Mijoz: {client_name}
-   Tel: {client_phone}
-   Mahsulot: {product_name}
-   Miqdor: {quantity} ta
-   Narx: {price_str}
+   👤 Mijoz: {client_name}
+   📞 Tel: {client_phone}
+   💰 Narx: {price_str}
 """
+        # Barcha mahsulotlarni ko'rsatish
+        products = order.get("products", [])
+        if products:
+            text += "   📦 Mahsulotlar:\n"
+            for idx, prod in enumerate(products, 1):
+                prod_name = prod.get('name', 'Noma\'lum')
+                prod_qty = prod.get('quantity', 1)
+                prod_price = prod.get('price', 0)
+                if isinstance(prod_price, (int, float)) and prod_price:
+                    prod_price_str = f"{prod_price:,.0f}".replace(",", " ")
+                else:
+                    prod_price_str = "0"
+                text += f"      {idx}. {prod_name} x{prod_qty} ({prod_price_str} so'm)\n"
+        else:
+            # Eski format uchun orqaga moslik
+            product_name = order.get("product_name") or order.get("mahsulot", "Noma'lum")
+            quantity = order.get("quantity") or order.get("miqdor", 1)
+            text += f"   📦 Mahsulot: {product_name} x{quantity}\n"
+
+    if orders_count > 10:
+        text += f"\n... va yana {orders_count - 10} ta buyurtma\n"
 
     # Footer
     text += f"""
@@ -1407,6 +1424,7 @@ async def process_seller_orders(seller_phone, order_ids, business_info, language
                 "mahsulot": bi.get('mahsulot', 'Buyurtma'),
                 "miqdor": bi.get('miqdor', 1),
                 "narx": bi.get('narx', narx),
+                "products": bi.get('products', []),  # Barcha mahsulotlar
             })
 
         seller_orders = {
@@ -1575,16 +1593,26 @@ async def polling_task():
                 business_info['mijoz_nomi'] = mijoz_nomi
                 business_info['mijoz_tel'] = user.get('phone', '')
 
-                # Items (mahsulotlar) - order_item dan olish
+                # Barcha mahsulotlarni olish - order_item dan
                 order_items = order.get('order_item', [])
+                products_list = []
                 if order_items:
-                    first_item = order_items[0] if isinstance(order_items[0], dict) else {}
-                    product = first_item.get('product', {})
-                    business_info['mahsulot'] = product.get('name', 'Mahsulot')
+                    for item in order_items:
+                        if isinstance(item, dict):
+                            product = item.get('product', {})
+                            products_list.append({
+                                'name': product.get('name', 'Mahsulot'),
+                                'quantity': item.get('quantity', 1),
+                                'price': product.get('price', 0)
+                            })
+                    # Birinchi mahsulot nomi (qisqa ko'rinish uchun)
+                    business_info['mahsulot'] = products_list[0]['name'] if products_list else 'Noma\'lum'
                     business_info['miqdor'] = len(order_items)
+                    business_info['products'] = products_list  # Barcha mahsulotlar
                 else:
                     business_info['mahsulot'] = 'Noma\'lum'
                     business_info['miqdor'] = 1
+                    business_info['products'] = []
 
                 # Telefon raqamini olish - biznes yoki mijoz tel
                 # Biznes telefon yo'q, mijoz telefon ishlatamiz
@@ -2093,14 +2121,33 @@ async def handle_test_alert(request):
             # Buyurtma ma'lumotlarini qo'shish
             user = order.get('user', {})
             mijoz_nomi = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Noma\'lum'
+            mijoz_tel = user.get('phone', '') or 'Noma\'lum'
+
+            # Barcha mahsulotlarni olish
+            order_items = order.get('order_item', [])
+            products_list = []
+            if order_items:
+                for item in order_items:
+                    if isinstance(item, dict):
+                        product = item.get('product', {})
+                        products_list.append({
+                            'name': product.get('name', 'Mahsulot'),
+                            'quantity': item.get('quantity', 1),
+                            'price': product.get('price', 0)
+                        })
+
+            # Birinchi mahsulot nomi
+            first_product = products_list[0]['name'] if products_list else 'Buyurtma'
+
             orders_by_seller[seller_phone]["orders"].append({
                 "lead_id": order.get('id'),
                 "order_number": order.get('id'),
                 "mijoz_nomi": mijoz_nomi,
-                "mijoz_tel": user.get('phone', 'Noma\'lum'),
-                "mahsulot": "Buyurtma",
-                "miqdor": 1,
-                "narx": order.get('total_price', 0)
+                "mijoz_tel": mijoz_tel,
+                "mahsulot": first_product,
+                "miqdor": len(order_items) or 1,
+                "narx": order.get('total_price', 0),
+                "products": products_list  # Barcha mahsulotlar
             })
 
             # order_to_seller mapping
