@@ -1085,20 +1085,25 @@ async def process_seller_orders(seller_phone: str, order_ids: List[int], busines
         order_count = len(final_pending)
         logger.warning(f"Sotuvchi {seller_phone}: {order_count} ta buyurtma qabul qilinmadi!")
 
+        # business_info dan ma'lumot olish (pending_orders o'chirilgan bo'lishi mumkin)
         biznes_nomi = business_info.get('biznes_nomi') or 'Noma\'lum'
+        mijoz_nomi = business_info.get('mijoz_nomi') or 'Noma\'lum'
+        mijoz_tel = business_info.get('mijoz_tel') or 'Noma\'lum'
+        narx = business_info.get('narx', 0)
 
         orders_list = []
         for oid in final_pending:
+            # Avval pending_orders dan, keyin business_info dan olish
             order_data = pending_orders.get(oid, {})
-            bi = order_data.get('business_info', {})
+            bi = order_data.get('business_info', business_info)
             orders_list.append({
                 "lead_id": oid,
                 "order_number": oid,
-                "mijoz_nomi": bi.get('mijoz_nomi', 'Noma\'lum'),
-                "mijoz_tel": bi.get('mijoz_tel', 'Noma\'lum'),
-                "mahsulot": bi.get('mahsulot', 'Noma\'lum'),
+                "mijoz_nomi": bi.get('mijoz_nomi', mijoz_nomi),
+                "mijoz_tel": bi.get('mijoz_tel', mijoz_tel),
+                "mahsulot": bi.get('mahsulot', 'Buyurtma'),
                 "miqdor": bi.get('miqdor', 1),
-                "narx": bi.get('narx', 0),
+                "narx": bi.get('narx', narx),
             })
 
         seller_orders = {
@@ -1107,6 +1112,8 @@ async def process_seller_orders(seller_phone: str, order_ids: List[int], busines
             "seller_address": business_info.get('biznes_manzil', 'Noma\'lum'),
             "orders": orders_list
         }
+
+        logger.info(f"Telegram xabar yuborilmoqda: {seller_phone}, {order_count} ta buyurtma")
         send_seller_orders_alert(seller_orders, call_attempts=MAX_RETRIES)
 
     if seller_phone in seller_order_groups:
