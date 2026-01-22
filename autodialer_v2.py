@@ -32,6 +32,20 @@ TELEGRAM_ADMIN_CHAT_ID = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "")
 
 # Nonbor API
 NONBOR_API_URL = os.environ.get("NONBOR_API_URL", "https://test.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/")
+NONBOR_BASE_URL = "https://test.nonbor.uz/api/v2"
+NONBOR_BUSINESSES_URL = f"{NONBOR_BASE_URL}/telegram_bot/businesses/accepted/"
+NONBOR_REGIONS_URL = f"{NONBOR_BASE_URL}/regions/"
+NONBOR_ORDERS_URL = f"{NONBOR_BASE_URL}/orders/"
+NONBOR_BUSINESS_STATS_URL = f"{NONBOR_BASE_URL}/telegram_bot/business-stats/"
+NONBOR_SECRET_KEY = os.environ.get("NONBOR_SECRET_KEY", "nonbor-secret-key")
+
+def get_nonbor_headers():
+    """Nonbor API uchun headerlar"""
+    return {
+        "X-Telegram-Bot-Secret": NONBOR_SECRET_KEY,
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
 
 # amoCRM API sozlamalari - ENVIRONMENT VARIABLES dan
 AMOCRM_DOMAIN = os.environ.get("AMOCRM_DOMAIN", "")
@@ -55,7 +69,9 @@ WAIT_BEFORE_CALL = 90  # 1.5 daqiqa (90 sek) kutish
 MAX_RETRIES = 2  # 2 marta qo'ng'iroq
 TELEGRAM_ALERT_TIME = 150  # 2.5 daqiqada (150 sek) Telegram xabar
 POLLING_INTERVAL = 3  # Har 3 sekundda tekshirish (real-time)
-CALL_WAIT_TIME = 30  # Qo'ng'iroqlar orasida kutish
+CALL_WAIT_TIME = 10  # Javob bermasa 10 sekdan keyin qayta qo'ng'iroq
+AUDIO_PLAY_TIME = 40  # Qo'ng'iroq davomiyligi (40 sek)
+STATUS_ALERT_TIMEOUT = 180  # 180 sekundda status o'zgarmasa Telegram ogohlantirish
 # PARALLEL ishlash: Har bir sotuvchi MUSTAQIL task da ishlaydi (asyncio.create_task)
 
 # TTS (Text-to-Speech) sozlamalari
@@ -103,6 +119,10 @@ order_to_seller = {}  # {order_id: seller_phone} - Buyurtma → Sotuvchi mapping
 order_statuses = {}  # {order_id: status} - Buyurtma statuslarini kuzatish
 processed_orders = set()  # Qayta ishlanmagan buyurtmalar
 call_results = {}  # {order_id: result} - IVR natijalar
+phone_call_answered = {}  # {phone: True} - Telefon bo'yicha javob berilgan qo'ng'iroqlar
+order_first_seen = {}  # {order_id: datetime} - Buyurtma birinchi ko'rilgan vaqt (180 sek alert uchun)
+status_alerted_orders = set()  # Ogohlantirish yuborilgan buyurtmalar (qayta yubormaslik uchun)
+status_alert_messages = {}  # {seller_phone: message_id} - Status alert xabarlari (yangilash uchun)
 
 # ============ QO'NG'IROQ TARIXI (amoCRM uchun) ============
 call_history = []  # [{id, phone, direction, status, duration, timestamp}]
@@ -519,7 +539,8 @@ def send_seller_orders_alert(seller_orders, call_attempts=0):
         # Buyurtmalar ma'lumotlarini saqlash (xabar tahrirlash uchun)
         seller_orders_data[seller_phone] = {
             "seller_orders": seller_orders,
-            "call_attempts": call_attempts
+            "call_attempts": call_attempts,
+            "created_at": datetime.now()
         }
         logger.info(f"✅ Telegram xabar yuborildi: Sotuvchi {seller_phone}, message_id: {result}")
     else:
@@ -609,6 +630,11 @@ def update_seller_telegram_on_status_change(seller_phone, order_id, new_status):
     Bu usul "tahrirlash" o'rniga "o'chirish + qayta yuborish" qiladi
     """
     try:
+        # Agar buyurtma qabul qilingan bo'lsa - telefon javob berdi deb belgilash
+        if new_status in [ORDER_STATUS_ACCEPTED, ORDER_STATUS_READY, ORDER_STATUS_DELIVERING, ORDER_STATUS_COMPLETED]:
+            phone_call_answered[seller_phone] = True
+            logger.info(f"Telefon {seller_phone}: Javob berdi (status: {new_status})")
+
         message_id = seller_messages.get(seller_phone)
 
         # Saqlangan buyurtmalar ma'lumotini olish
@@ -667,7 +693,8 @@ def update_seller_telegram_on_status_change(seller_phone, order_id, new_status):
             # Saqlangan ma'lumotni yangilash
             seller_orders_data[seller_phone] = {
                 "seller_orders": updated_seller_orders,
-                "call_attempts": call_attempts
+                "call_attempts": call_attempts,
+                "created_at": datetime.now()
             }
             logger.info(f"✅ YANGI Telegram xabar yuborildi: {len(updated_orders)} ta buyurtma qoldi (message_id: {new_message_id})")
             return True
@@ -747,7 +774,7 @@ def get_all_orders():
     Bu qo'ng'iroq qilish kerak bo'lgan buyurtmalar.
     """
     try:
-        response = requests.get(NONBOR_API_URL, timeout=30)
+        response = requests.get(NONBOR_API_URL, headers=get_nonbor_headers(), timeout=30)
 
         if response.status_code == 200:
             data = response.json()
@@ -777,7 +804,7 @@ def get_all_orders():
 def get_all_orders_from_nonbor():
     """Nonbor API dan BARCHA buyurtmalarni olish (debug uchun)"""
     try:
-        response = requests.get(NONBOR_API_URL, timeout=30)
+        response = requests.get(NONBOR_API_URL, headers=get_nonbor_headers(), timeout=30)
 
         if response.status_code == 200:
             data = response.json()
@@ -853,7 +880,7 @@ def get_checking_orders():
     API yangi formati: {success: true, result: {results: [...]}}
     """
     try:
-        response = requests.get(NONBOR_API_URL, timeout=30)
+        response = requests.get(NONBOR_API_URL, headers=get_nonbor_headers(), timeout=30)
 
         if response.status_code == 200:
             data = response.json()
@@ -882,7 +909,7 @@ def get_checking_orders():
 def get_order_status(order_id):
     """Buyurtma statusini tekshirish"""
     try:
-        response = requests.get(NONBOR_API_URL, timeout=30)
+        response = requests.get(NONBOR_API_URL, headers=get_nonbor_headers(), timeout=30)
         if response.status_code == 200:
             data = response.json()
 
@@ -1363,26 +1390,37 @@ async def process_seller_orders(seller_phone, order_ids, business_info, language
 
         # Qo'ng'iroq statistikasini yozish (faqat qo'ng'iroq muvaffaqiyatli bo'lsa)
         if call_success:
-            # Qo'ng'iroq javobini kutish
-            await asyncio.sleep(CALL_WAIT_TIME)
+            # Audio to'liq ijro etilishi uchun kutish (ringing + audio)
+            logger.info(f"Sotuvchi {seller_phone}: Audio ijro etilmoqda, {AUDIO_PLAY_TIME} sek kutilmoqda...")
+            await asyncio.sleep(AUDIO_PLAY_TIME)
 
-            # Qo'ng'iroqdan keyin buyurtma holati tekshirish
+            # Qo'ng'iroqdan keyin buyurtma holati tekshirish (bir necha marta)
             orders_accepted_after_call = 0
-            for oid in still_pending:
-                new_status = get_order_status(oid)
-                if new_status and new_status != ORDER_STATUS_CHECKING:
-                    orders_accepted_after_call += 1
+            for check_attempt in range(3):  # 3 marta tekshirish
+                for oid in still_pending:
+                    new_status = get_order_status(oid)
+                    if new_status and new_status != ORDER_STATUS_CHECKING:
+                        orders_accepted_after_call += 1
+                        phone_call_answered[seller_phone] = True  # Telefon javob berdi
+
+                if orders_accepted_after_call > 0:
+                    break  # Qabul qilindi - tekshirishni to'xtatish
+
+                # Qisqa kutish va qayta tekshirish
+                if check_attempt < 2:
+                    await asyncio.sleep(5)
 
             # Agar hech bo'lmasa bitta buyurtma qabul qilingan bo'lsa - javob berilgan
-            if orders_accepted_after_call > 0:
+            if orders_accepted_after_call > 0 or phone_call_answered.get(seller_phone):
                 record_call_statistic(answered=True, attempt=attempt)
                 call_answered = True
                 answered_at_attempt = attempt
-                logger.info(f"Sotuvchi {seller_phone}: Javob berildi, qayta qo'ng'iroq to'xtatildi")
+                logger.info(f"Sotuvchi {seller_phone}: ✅ Javob berildi! Qayta qo'ng'iroq to'xtatildi")
                 break  # Javob berildi - qayta qo'ng'iroq qilmaslik
             else:
-                # Hali javob berilmagan (keyingi attemptda tekshiramiz)
-                pass
+                logger.info(f"Sotuvchi {seller_phone}: Javob berilmadi, keyingi urinish...")
+                # Javob bermasa 10 sekdan keyin qayta qo'ng'iroq
+                await asyncio.sleep(CALL_WAIT_TIME)
         else:
             await asyncio.sleep(CALL_WAIT_TIME)
 
@@ -1407,38 +1445,14 @@ async def process_seller_orders(seller_phone, order_ids, business_info, language
         order_count = len(final_pending)
         logger.warning(f"Sotuvchi {seller_phone}: {order_count} ta buyurtma qabul qilinmadi!")
 
-        # business_info dan ma'lumot olish (pending_orders o'chirilgan bo'lishi mumkin)
-        biznes_nomi = business_info.get('biznes_nomi') or 'Noma\'lum'
-        mijoz_nomi = business_info.get('mijoz_nomi') or 'Noma\'lum'
-        mijoz_tel = business_info.get('mijoz_tel') or 'Noma\'lum'
-        narx = business_info.get('narx', 0)
-
-        # Har bir buyurtma uchun to'liq ma'lumot olish
-        orders_list = []
+        # Telegram xabar yuborish - hali qabul qilinmagan buyurtmalar ro'yxati
+        seller_orders = []
         for oid in final_pending:
-            # Avval pending_orders dan, keyin business_info dan olish
-            order_data = pending_orders.get(oid, {})
-            bi = order_data.get('business_info', business_info)
-            orders_list.append({
-                "lead_id": oid,
-                "order_number": oid,
-                "mijoz_nomi": bi.get('mijoz_nomi', mijoz_nomi),
-                "mijoz_tel": bi.get('mijoz_tel', mijoz_tel),
-                "mahsulot": bi.get('mahsulot', 'Buyurtma'),
-                "miqdor": bi.get('miqdor', 1),
-                "narx": bi.get('narx', narx),
-                "products": bi.get('products', []),  # Barcha mahsulotlar
-            })
+            if oid in pending_orders:
+                seller_orders.append(pending_orders[oid])
 
-        seller_orders = {
-            "seller_name": biznes_nomi,
-            "seller_phone": seller_phone,
-            "seller_address": business_info.get('biznes_manzil', 'Noma\'lum'),
-            "orders": orders_list
-        }
-
-        logger.info(f"Telegram xabar yuborilmoqda: {seller_phone}, {order_count} ta buyurtma")
-        send_seller_orders_alert(seller_orders, call_attempts=MAX_RETRIES)
+        if seller_orders:
+            send_seller_orders_alert(seller_orders, call_attempts=MAX_RETRIES)
 
     # Guruhni tozalash
     if seller_phone in seller_order_groups:
@@ -1450,6 +1464,321 @@ async def process_seller_orders(seller_phone, order_ids, business_info, language
             del pending_orders[oid]
 
     logger.info(f"Sotuvchi {seller_phone}: Task tugadi, guruh tozalandi")
+
+
+# ============ CLEANUP TASK - ESKI XABARLARNI TOZALASH ============
+CLEANUP_INTERVAL = 300  # 5 daqiqada bir marta tozalash
+MESSAGE_MAX_AGE = 600  # 10 daqiqadan eski xabarlarni tozalash
+
+
+async def cleanup_task():
+    """
+    Eski/qolgan xabarlar va ma'lumotlarni davriy tozalash:
+    - seller_messages va seller_orders_data (10 daqiqadan eski)
+    - order_statuses, order_to_seller (pending_orders da yo'q)
+    - phone_call_answered (1 soatdan eski)
+    - Telegram xabarlarni o'chirish
+    """
+    logger.info("🧹 Cleanup task boshlandi...")
+
+    while True:
+        try:
+            await asyncio.sleep(CLEANUP_INTERVAL)
+
+            now = datetime.now()
+            cleaned_count = 0
+
+            # ===== 1. ESKI seller_orders_data va seller_messages TOZALASH =====
+            sellers_to_remove = []
+            for seller_phone, data in list(seller_orders_data.items()):
+                created_at = data.get("created_at")
+
+                if created_at:
+                    age_seconds = (now - created_at).total_seconds()
+
+                    # 10 daqiqadan eski
+                    if age_seconds > MESSAGE_MAX_AGE:
+                        sellers_to_remove.append(seller_phone)
+                        logger.info(f"🧹 Sotuvchi {seller_phone}: {age_seconds:.0f} sek eski, tozalanmoqda")
+                else:
+                    # created_at yo'q bo'lsa, buyurtmalar sonini tekshirish
+                    orders_list = data.get("seller_orders", {}).get("orders", [])
+                    if not orders_list:
+                        sellers_to_remove.append(seller_phone)
+                        logger.info(f"🧹 Sotuvchi {seller_phone}: Buyurtmalar yo'q, tozalanmoqda")
+
+            # Tozalash
+            for seller_phone in sellers_to_remove:
+                # Telegram xabarni O'CHIRISH
+                if seller_phone in seller_messages:
+                    message_id = seller_messages[seller_phone]
+                    try:
+                        delete_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
+                        response = requests.post(delete_url, data={
+                            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+                            "message_id": message_id
+                        }, timeout=10)
+                        if response.status_code == 200:
+                            logger.info(f"🧹 Telegram xabar o'chirildi: {seller_phone}")
+                    except Exception as e:
+                        logger.warning(f"🧹 Telegram o'chirish xatosi: {e}")
+                    del seller_messages[seller_phone]
+
+                # seller_orders_data dan o'chirish
+                if seller_phone in seller_orders_data:
+                    del seller_orders_data[seller_phone]
+
+                cleaned_count += 1
+
+            # ===== 2. ORDER_STATUSES va ORDER_TO_SELLER TOZALASH =====
+            # pending_orders da yo'q va 5 daqiqadan eski statuslarni o'chirish
+            statuses_to_remove = []
+            for order_id in list(order_statuses.keys()):
+                if order_id not in pending_orders:
+                    statuses_to_remove.append(order_id)
+
+            for order_id in statuses_to_remove:
+                if order_id in order_statuses:
+                    del order_statuses[order_id]
+                if order_id in order_to_seller:
+                    del order_to_seller[order_id]
+                cleaned_count += 1
+
+            # ===== 3. PHONE_CALL_ANSWERED TOZALASH (1 soatdan eski) =====
+            # phone_call_answered ni tozalash - 1 soatdan keyin
+            if len(phone_call_answered) > 100:
+                # Juda ko'p bo'lsa, eng eskilerini o'chirish
+                phone_call_answered.clear()
+                logger.info(f"🧹 phone_call_answered tozalandi (> 100 ta)")
+                cleaned_count += 1
+
+            # ===== 4. PROCESSED_ORDERS TOZALASH =====
+            # 1000 dan oshsa, eski qismini o'chirish
+            if len(processed_orders) > 1000:
+                # Set dan 500 ta o'chirish
+                items_to_remove = list(processed_orders)[:500]
+                for item in items_to_remove:
+                    processed_orders.discard(item)
+                logger.info(f"🧹 processed_orders tozalandi (500 ta o'chirildi)")
+                cleaned_count += 1
+
+            if cleaned_count > 0:
+                logger.info(f"🧹 Cleanup tugadi: {cleaned_count} ta element tozalandi")
+
+        except Exception as e:
+            logger.error(f"🧹 Cleanup xatosi: {e}")
+            await asyncio.sleep(60)  # Xatolikda 1 daqiqa kutish
+
+
+def check_status_alerts():
+    """
+    180 sekundda statusi o'zgarmagan buyurtmalar uchun Telegram ogohlantirish
+    Sotuvchi bo'yicha guruhlangan batafsil xabar yuboriladi
+    Yangi buyurtma kelganda eski xabar o'chiriladi va yangilanadi
+    """
+    now = datetime.now()
+    alerts_sent = 0
+
+    # Sotuvchi bo'yicha BARCHA 180+ sekundlik buyurtmalarni yig'ish
+    sellers_all_orders = {}  # {seller_phone: [ALL order_ids 180+ sek]}
+    sellers_new_orders = {}  # {seller_phone: [NEW order_ids - hali alert yuborilmagan]}
+
+    for order_id, first_seen in list(order_first_seen.items()):
+        # Agar buyurtma hali pending_orders da bo'lsa
+        if order_id in pending_orders:
+            age_seconds = (now - first_seen).total_seconds()
+
+            # 180 sekunddan oshgan
+            if age_seconds >= STATUS_ALERT_TIMEOUT:
+                order_data = pending_orders.get(order_id, {})
+                seller_phone = order_data.get('seller_phone', 'Noma\'lum')
+
+                # Barcha 180+ sek buyurtmalarni yig'ish
+                if seller_phone not in sellers_all_orders:
+                    sellers_all_orders[seller_phone] = []
+                sellers_all_orders[seller_phone].append(order_id)
+
+                # Faqat yangi (hali alert yuborilmagan) buyurtmalarni alohida belgilash
+                if order_id not in status_alerted_orders:
+                    if seller_phone not in sellers_new_orders:
+                        sellers_new_orders[seller_phone] = []
+                    sellers_new_orders[seller_phone].append(order_id)
+        else:
+            # Buyurtma pending_orders dan o'chirilgan - order_first_seen dan ham o'chirish
+            if order_id in order_first_seen:
+                del order_first_seen[order_id]
+            if order_id in status_alerted_orders:
+                status_alerted_orders.discard(order_id)
+
+    # Har bir sotuvchi uchun batafsil alert yuborish (faqat yangi buyurtma bo'lsa)
+    for seller_phone, new_order_ids in sellers_new_orders.items():
+        # Bu sotuvchi uchun barcha 180+ sek buyurtmalar
+        order_ids = sellers_all_orders.get(seller_phone, new_order_ids)
+        # seller_orders_data dan ma'lumotlarni olish
+        saved_data = seller_orders_data.get(seller_phone, {})
+        seller_orders = saved_data.get("seller_orders", {})
+        call_attempts = saved_data.get("call_attempts", 0)
+
+        # Sotuvchi ma'lumotlari
+        seller_name = seller_orders.get("seller_name", "Noma'lum")
+        seller_address = seller_orders.get("seller_address", "Noma'lum")
+        delivery_time = seller_orders.get("delivery_time", "")
+        orders = seller_orders.get("orders", [])
+
+        # Agar seller_orders bo'sh bo'lsa, pending_orders dan olish
+        if not orders:
+            orders = []
+            for oid in order_ids:
+                od = pending_orders.get(oid, {})
+                bi = od.get('business_info', {})
+                orders.append({
+                    "order_number": oid,
+                    "lead_id": oid,
+                    "client_name": bi.get('mijoz_nomi', 'Noma\'lum'),
+                    "client_phone": bi.get('mijoz_tel', 'Noma\'lum'),
+                    "price": bi.get('narx', 0),
+                    "products": bi.get('products', []),
+                })
+                if not seller_name or seller_name == "Noma'lum":
+                    seller_name = bi.get('biznes_nomi', 'Noma\'lum')
+                if not seller_address or seller_address == "Noma'lum":
+                    seller_address = bi.get('biznes_manzil', 'Noma\'lum')
+
+        orders_count = len(orders)
+        if orders_count == 0:
+            orders_count = len(order_ids)
+
+        # Umumiy narx
+        total_price = 0
+        for o in orders:
+            price = o.get("price") or o.get("narx", 0)
+            if isinstance(price, str):
+                price = price.replace(",", "").replace(" ", "")
+                try:
+                    price = float(price)
+                except:
+                    price = 0
+            total_price += price or 0
+
+        total_price_str = f"{total_price:,.0f}".replace(",", " ") + " so'm"
+
+        # Sotuvchi telefon raqamini formatlash
+        seller_phone_fmt = seller_phone
+        if seller_phone_fmt and not str(seller_phone_fmt).startswith('+'):
+            seller_phone_fmt = '+' + str(seller_phone_fmt)
+
+        # Kutish vaqti (eng eski buyurtma)
+        oldest_age = 0
+        for oid in order_ids:
+            if oid in order_first_seen:
+                age = (now - order_first_seen[oid]).total_seconds()
+                if age > oldest_age:
+                    oldest_age = age
+
+        # Batafsil xabar
+        text = f"""🚨 <b>DIQQAT! {orders_count} ta buyurtma qabul qilinmadi!</b>
+
+<b>SOTUVCHI:</b>
+  Nomi: {seller_name}
+  Tel: {seller_phone_fmt}
+  Manzil: {seller_address}"""
+
+        if delivery_time:
+            text += f"\n  Yetkazish vaqti: {delivery_time}"
+
+        # Buyurtmalar bo'limi
+        text += "\n\n<b>━━━ BUYURTMALAR ━━━</b>\n"
+
+        for i, order in enumerate(orders[:10], 1):
+            order_number = order.get("order_number") or order.get("lead_id", "N/A")
+            client_name = order.get("client_name") or order.get("mijoz_nomi", "Noma'lum")
+            client_phone = order.get("client_phone") or order.get("mijoz_tel", "Noma'lum")
+            if client_phone and not str(client_phone).startswith('+'):
+                client_phone = '+' + str(client_phone)
+            price = order.get("price") or order.get("narx", 0)
+
+            if isinstance(price, (int, float)) and price:
+                price_str = f"{price:,.0f}".replace(",", " ") + " so'm"
+            elif isinstance(price, str) and price:
+                price_str = price + " so'm"
+            else:
+                price_str = "Noma'lum"
+
+            text += f"""
+<b>{i}. Buyurtma #{order_number}</b>
+   👤 Mijoz: {client_name}
+   📞 Tel: {client_phone}
+   💰 Narx: {price_str}
+"""
+            # Mahsulotlar
+            products = order.get("products", [])
+            if products:
+                text += "   📦 Mahsulotlar:\n"
+                for idx, prod in enumerate(products, 1):
+                    prod_name = prod.get('name', 'Noma\'lum')
+                    prod_qty = prod.get('quantity', 1)
+                    prod_price = prod.get('price', 0)
+                    if isinstance(prod_price, (int, float)) and prod_price:
+                        prod_price_str = f"{prod_price:,.0f}".replace(",", " ")
+                    else:
+                        prod_price_str = "0"
+                    text += f"      {idx}. {prod_name} x{prod_qty} ({prod_price_str} so'm)\n"
+
+        if orders_count > 10:
+            text += f"\n... va yana {orders_count - 10} ta buyurtma\n"
+
+        # Footer
+        text += f"""
+<b>━━━━━━━━━━━━━━━━━━━━━</b>
+📦 Jami: <b>{orders_count}</b> ta buyurtma
+💰 Umumiy: <b>{total_price_str}</b>
+⏱ Kutish: <b>{int(oldest_age)} sek</b> (180+ sek o'tdi!)
+
+❌ Buyurtmalarni qabul qilmayapti!
+📞 {call_attempts} marta qo'ng'iroq qilindi.
+🔴 Zudlik bilan bog'laning!
+
+📱 <a href="https://test.nonbor.uz">Buyurtmalarni ko'rish</a>"""
+
+        # Telegram ga yuborish (eski xabarni o'chirib yangi yuborish)
+        try:
+            # 1. Eski xabarni o'chirish (agar mavjud bo'lsa)
+            old_message_id = status_alert_messages.get(seller_phone)
+            if old_message_id:
+                try:
+                    delete_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
+                    requests.post(delete_url, data={
+                        "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+                        "message_id": old_message_id
+                    }, timeout=5)
+                except:
+                    pass  # Eski xabar o'chirilmasa ham davom etamiz
+
+            # 2. Yangi xabar yuborish
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            response = requests.post(url, data={
+                "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+                "text": text,
+                "parse_mode": "HTML"
+            }, timeout=10)
+
+            if response.status_code == 200:
+                result = response.json()
+                new_message_id = result.get("result", {}).get("message_id")
+                # Yangi xabar ID ni saqlash
+                if new_message_id:
+                    status_alert_messages[seller_phone] = new_message_id
+                logger.warning(f"⚠️ Status alert yuborildi: Sotuvchi {seller_phone}, {len(order_ids)} ta buyurtma, {int(oldest_age)} sek")
+                # Barcha buyurtmalarni alerted ga qo'shish
+                for oid in order_ids:
+                    status_alerted_orders.add(oid)
+                alerts_sent += 1
+            else:
+                logger.error(f"⚠️ Status alert xatosi: {response.text}")
+        except Exception as e:
+            logger.error(f"⚠️ Status alert xatosi: {e}")
+
+    return alerts_sent
 
 
 async def polling_task():
@@ -1523,6 +1852,12 @@ async def polling_task():
                     else:
                         logger.warning(f"📊 Sotuvchi topilmadi: buyurtma #{order_id}")
 
+                    # Guruh xabarini yangilash (fallback)
+                    for msg_id, msg_data in list(order_group_messages.items()):
+                        if msg_data.get('order_id') == order_id:
+                            update_order_status_in_group(msg_id, current_status)
+                            break
+
                 # Statusni saqlash
                 order_statuses[order_id] = current_status
 
@@ -1577,15 +1912,19 @@ async def polling_task():
                     if seller_language not in TTS_VOICES:
                         seller_language = DEFAULT_LANGUAGE
 
+                business_id = business.get('id')
                 business_info = {
                     'biznes_nomi': business.get('title', 'Noma\'lum'),
                     'biznes_tel': None,  # API dan olinadi
                     'biznes_manzil': business.get('address', ''),
+                    'business_id': business_id,
                     'order_id': order_id,
                     'narx': order.get('total_price', 0),
+                    'summa': order.get('total_price', 0),
                     'tolov': order.get('payment_method', 'CASH'),
                     'yetkazish': order.get('delivery_method', 'DELIVERY'),
                     'language': seller_language,  # Sotuvchi tili
+                    'created_at': order.get('created_at', ''),
                 }
 
                 # Mijoz ma'lumotlari
@@ -1639,16 +1978,24 @@ async def polling_task():
                 # Pending va processed ga qo'shish
                 pending_orders[order_id] = {
                     'order_id': order_id,
+                    'order_number': order_id,
                     'seller_phone': phone,
+                    'biznes_nomi': business_info.get('biznes_nomi', 'Noma\'lum'),
                     'business_info': business_info,
                     'created_at': order.get('created_at', datetime.now().isoformat())
                 }
                 processed_orders.add(order_id)
+                # 180 sek alert uchun birinchi ko'rilgan vaqtni saqlash
+                order_first_seen[order_id] = datetime.now()
 
                 # order_to_seller mapping (status kuzatish uchun)
                 order_to_seller[order_id] = phone
 
                 logger.info(f"Yangi buyurtma: #{order_id} - {phone} - {business_info.get('biznes_nomi')}")
+
+                # Biznes guruhiga xabar yuborish
+                if business_id:
+                    send_order_to_business_group(order_id, business_id, business_info)
 
             # Har bir sotuvchi uchun yangi buyurtmalarni qayta ishlash
             for seller_phone, orders_list in new_orders_by_seller.items():
@@ -1671,13 +2018,59 @@ async def polling_task():
             # Eski processed buyurtmalarni tozalash
             # API da yo'q bo'lgan buyurtmalarni processed dan o'chirish
             current_order_ids = set(o.get('id') for o in orders)
+
+            # pending_orders dagi lekin API da yo'q buyurtmalarni tozalash
+            pending_to_remove = [oid for oid in pending_orders if oid not in current_order_ids]
+            # Sotuvchi bo'yicha guruhlash (Telegram xabar o'chirish uchun)
+            sellers_to_update = set()
+            for oid in pending_to_remove:
+                logger.info(f"Buyurtma #{oid}: API dan yo'qoldi - pending dan tozalandi (status o'zgargan)")
+                # Sotuvchini topish
+                seller_phone = order_to_seller.get(oid) or pending_orders.get(oid, {}).get('seller_phone')
+                if seller_phone:
+                    sellers_to_update.add(seller_phone)
+                # Telegram xabarini o'chirish (order_messages)
+                delete_telegram_message(oid)
+                del pending_orders[oid]
+                processed_orders.discard(oid)
+                if oid in order_statuses:
+                    del order_statuses[oid]
+                if oid in order_to_seller:
+                    del order_to_seller[oid]
+                # 180 sek alert uchun tozalash
+                if oid in order_first_seen:
+                    del order_first_seen[oid]
+                status_alerted_orders.discard(oid)
+
+            # Sotuvchi xabarlarini o'chirish
+            for seller_phone in sellers_to_update:
+                # Agar bu sotuvchiga tegishli boshqa buyurtmalar bo'lmasa, xabarni o'chirish
+                remaining_orders = [oid for oid, data in pending_orders.items() if data.get('seller_phone') == seller_phone]
+                if not remaining_orders:
+                    # Barcha buyurtmalar qabul qilindi - xabarni O'CHIRISH
+                    delete_seller_telegram_message(seller_phone)
+
+                    # Status alert xabarini o'chirish
+                    if seller_phone in status_alert_messages:
+                        try:
+                            delete_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
+                            requests.post(delete_url, data={
+                                "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+                                "message_id": status_alert_messages[seller_phone]
+                            }, timeout=5)
+                        except:
+                            pass
+                        del status_alert_messages[seller_phone]
+
+            # Eski processed buyurtmalarni ham tozalash
             old_processed = [oid for oid in processed_orders if oid not in current_order_ids]
             for oid in old_processed:
                 processed_orders.discard(oid)
-                if oid in pending_orders:
-                    del pending_orders[oid]
-            if old_processed:
-                logger.info(f"Eski buyurtmalar tozalandi: {len(old_processed)} ta")
+            if old_processed or pending_to_remove:
+                logger.info(f"Eski buyurtmalar tozalandi: {len(old_processed) + len(pending_to_remove)} ta")
+
+            # 180 sekundda status o'zgarmagan buyurtmalar uchun ogohlantirish
+            check_status_alerts()
 
         except Exception as e:
             logger.error(f"Polling xatosi: {e}")
@@ -1874,6 +2267,14 @@ async def handle_order_webhook(request):
 
         if seller_key:
             update_seller_telegram_on_status_change(seller_key, order_id, new_status)
+
+        # ===== GURUH XABARINI YANGILASH =====
+        # order_group_messages da buyurtma xabarini topish va yangilash
+        for msg_id, msg_data in list(order_group_messages.items()):
+            if msg_data.get('order_id') == order_id:
+                update_order_status_in_group(msg_id, new_status)
+                logger.info(f"Guruh xabari yangilandi: Buyurtma #{order_id} → {new_status}")
+                break
 
         # ===== PENDING/PROCESSED DAN TOZALASH =====
         if order_id in pending_orders:
@@ -2579,6 +2980,783 @@ def get_bot_statistics_text(period="daily"):
 """
     return text
 
+def get_orders_list_text():
+    """Kutilayotgan buyurtmalar ro'yxatini yaratish"""
+    if not pending_orders:
+        return """📦 <b>KUTILAYOTGAN BUYURTMALAR</b>
+
+Hozirda kutilayotgan buyurtmalar yo'q.
+
+⏰ Yangilangan: """ + datetime.now().strftime('%H:%M:%S')
+
+    text = """📦 <b>KUTILAYOTGAN BUYURTMALAR</b>
+
+"""
+    for i, (order_id, order_data) in enumerate(list(pending_orders.items())[:10], 1):
+        seller_phone = order_data.get('seller_phone', 'Noma\'lum')
+        order_time = order_data.get('created_at', '')
+        status = order_data.get('status', 'pending')
+        text += f"{i}. #{order_id}\n"
+        text += f"   📞 {seller_phone}\n"
+        text += f"   🕐 {order_time}\n\n"
+
+    if len(pending_orders) > 10:
+        text += f"... va yana {len(pending_orders) - 10} ta buyurtma\n"
+
+    text += f"\n📊 Jami: {len(pending_orders)} ta"
+    text += f"\n⏰ Yangilangan: {datetime.now().strftime('%H:%M:%S')}"
+    return text
+
+def get_calls_history_text():
+    """Oxirgi qo'ng'iroqlar tarixini yaratish"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_calls = call_statistics["by_date"].get(today, {})
+
+    text = """📞 <b>BUGUNGI QO'NG'IROQLAR</b>
+
+"""
+    text += f"📊 <b>Umumiy statistika:</b>\n"
+    text += f"   Jami: {today_calls.get('total', 0)} ta\n"
+    text += f"   ✅ Javob berildi: {today_calls.get('answered', 0)}\n"
+    text += f"   ❌ Javob berilmadi: {today_calls.get('unanswered', 0)}\n"
+    text += f"   1️⃣ 1-urinishda: {today_calls.get('first_attempt', 0)}\n"
+    text += f"   2️⃣ 2-urinishda: {today_calls.get('second_attempt', 0)}\n"
+
+    # Oxirgi qo'ng'iroqlar (processed_orders dan)
+    if processed_orders:
+        text += f"\n📝 <b>Oxirgi qayta ishlangan:</b>\n"
+        recent = list(processed_orders.items())[-5:]
+        for order_id, data in reversed(recent):
+            result = data.get('result', 'unknown')
+            emoji = "✅" if result == "answered" else "❌"
+            text += f"   {emoji} #{order_id}\n"
+
+    text += f"\n⏰ Yangilangan: {datetime.now().strftime('%H:%M:%S')}"
+    return text
+
+def get_sellers_list_text():
+    """Faol sotuvchilar ro'yxatini yaratish"""
+    if not seller_order_groups:
+        return """👨‍💼 <b>FAOL SOTUVCHILAR</b>
+
+Hozirda faol sotuvchilar yo'q.
+
+⏰ Yangilangan: """ + datetime.now().strftime('%H:%M:%S')
+
+    text = """👨‍💼 <b>FAOL SOTUVCHILAR</b>
+
+"""
+    for i, (seller_phone, orders) in enumerate(list(seller_order_groups.items())[:10], 1):
+        order_count = len(orders) if isinstance(orders, list) else 1
+        text += f"{i}. 📞 {seller_phone}\n"
+        text += f"   📦 Buyurtmalar: {order_count} ta\n\n"
+
+    if len(seller_order_groups) > 10:
+        text += f"... va yana {len(seller_order_groups) - 10} ta sotuvchi\n"
+
+    text += f"\n📊 Jami faol: {len(seller_order_groups)} ta"
+    text += f"\n⏰ Yangilangan: {datetime.now().strftime('%H:%M:%S')}"
+    return text
+
+# Bizneslar cache va pagination uchun global o'zgaruvchilar
+businesses_cache = []
+businesses_cache_time = None
+businesses_current_page = 1
+businesses_current_region = None
+businesses_current_district = None
+businesses_filtered_list = []  # Joriy filtrangan ro'yxat
+selected_business_id = None  # Tanlangan biznes ID
+waiting_for_group_id = False  # Guruh ID kutilmoqda
+waiting_for_phone_edit = False  # Telefon raqami kutilmoqda
+pending_phone_change = {}  # {"business_id": X, "new_phone": "+998..."}
+BUSINESSES_PER_PAGE = 10
+
+# Biznes egasi uchun guruh qo'shish holati
+owner_waiting_for_group = {}  # {chat_id: {"business_id": X, "telegram_user_id": Y}}
+
+# Bizneslar telegram guruhlari (local storage - faylga saqlanadi)
+BUSINESS_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "business_groups.json")
+business_telegram_groups = {}  # {business_id: {"group_id": "-100xxx", "group_name": "Guruh nomi"}}
+
+def load_business_groups():
+    """Fayldan guruh ma'lumotlarini yuklash"""
+    global business_telegram_groups
+    try:
+        if os.path.exists(BUSINESS_GROUPS_FILE):
+            with open(BUSINESS_GROUPS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Kalitlarni int ga aylantirish
+                business_telegram_groups = {int(k): v for k, v in data.items()}
+                logger.info(f"Guruh ma'lumotlari yuklandi: {len(business_telegram_groups)} ta")
+    except Exception as e:
+        logger.error(f"Guruh ma'lumotlarini yuklashda xato: {e}")
+        business_telegram_groups = {}
+
+def save_business_groups():
+    """Guruh ma'lumotlarini faylga saqlash"""
+    try:
+        with open(BUSINESS_GROUPS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(business_telegram_groups, f, ensure_ascii=False, indent=2)
+        logger.info(f"Guruh ma'lumotlari saqlandi: {len(business_telegram_groups)} ta")
+    except Exception as e:
+        logger.error(f"Guruh ma'lumotlarini saqlashda xato: {e}")
+
+# Dastur ishga tushganda guruhlarni yuklash
+load_business_groups()
+
+# Buyurtma xabarlari saqlash (message_id -> order_data)
+order_group_messages = {}  # {message_id: {"order_id": X, "business_id": Y, "group_id": Z, "order_data": {...}}}
+
+def send_order_to_business_group(order_id, business_id, order_data):
+    """Biznes guruhiga yangi buyurtma xabari yuborish"""
+    group_info = business_telegram_groups.get(business_id)
+    if not group_info:
+        logger.debug(f"Biznes #{business_id} uchun guruh topilmadi")
+        return None
+
+    group_id = group_info.get('group_id')
+    if not group_id:
+        return None
+
+    # Buyurtma ma'lumotlari
+    biznes_nomi = order_data.get('biznes_nomi', 'Nomalum')
+    summa = order_data.get('summa', 0)
+    yetkazish = order_data.get('yetkazish', 'DELIVERY')
+    products = order_data.get('products', [])
+    miqdor = order_data.get('miqdor', 1)
+    created_at = order_data.get('created_at', '')
+
+    # Vaqtni formatlash
+    try:
+        if created_at:
+            from datetime import datetime
+            if 'T' in str(created_at):
+                dt = datetime.fromisoformat(str(created_at).replace('Z', '+00:00'))
+            else:
+                dt = datetime.now()
+            vaqt_str = dt.strftime("%H:%M:%S")
+        else:
+            vaqt_str = datetime.now().strftime("%H:%M:%S")
+    except:
+        vaqt_str = datetime.now().strftime("%H:%M:%S")
+
+    # Yetkazish turi
+    yetkazish_emoji = "🚗" if yetkazish == "DELIVERY" else "🏃"
+    yetkazish_text = "Yetkazib berish" if yetkazish == "DELIVERY" else "Olib ketish"
+
+    # Mahsulotlar ro'yxati
+    products_text = ""
+    if products:
+        for i, p in enumerate(products, 1):
+            products_text += f"  {i}. {p.get('name', 'Mahsulot')} x{p.get('quantity', 1)}\n"
+    else:
+        products_text = f"  • {order_data.get('mahsulot', 'Mahsulot')} x{miqdor}\n"
+
+    # Xabar matni (mijoz ma'lumotlarisiz) - faqat kuzatish uchun
+    text = f"""🆕 <b>YANGI BUYURTMA #{order_id}</b>
+
+🏢 {biznes_nomi}
+⏰ Qabul qilingan: {vaqt_str}
+{yetkazish_emoji} {yetkazish_text}
+
+📦 <b>Mahsulotlar:</b>
+{products_text}
+💰 <b>Jami:</b> {summa:,.0f} so'm
+
+📊 <b>Holat:</b> ⏳ Kutilmoqda"""
+
+    # Xabar yuborish (tugmalarsiz - faqat kuzatish)
+    message_id = send_telegram_message_to_chat(group_id, text, None)
+
+    if message_id:
+        # Xabar ma'lumotlarini saqlash
+        order_group_messages[message_id] = {
+            "order_id": order_id,
+            "business_id": business_id,
+            "group_id": group_id,
+            "order_data": order_data,
+            "status": "pending",
+            "created_at": vaqt_str
+        }
+        logger.info(f"Buyurtma #{order_id} guruhga yuborildi: {group_id}")
+
+    return message_id
+
+def update_order_status_in_group(message_id, new_status, status_time=None):
+    """Guruhdagi buyurtma xabarini yangilash (API dan kelgan status)"""
+    if message_id not in order_group_messages:
+        return False
+
+    msg_data = order_group_messages[message_id]
+    old_status = msg_data.get('status', 'PENDING')
+
+    # Agar status o'zgarmagan bo'lsa, yangilamaymiz
+    if old_status == new_status:
+        return False
+
+    order_id = msg_data['order_id']
+    group_id = msg_data['group_id']
+    order_data = msg_data['order_data']
+    created_at = msg_data.get('created_at', '')
+
+    # Buyurtma ma'lumotlari
+    biznes_nomi = order_data.get('biznes_nomi', 'Nomalum')
+    summa = order_data.get('summa', 0)
+    yetkazish = order_data.get('yetkazish', 'DELIVERY')
+    products = order_data.get('products', [])
+    miqdor = order_data.get('miqdor', 1)
+
+    # Yetkazish turi
+    yetkazish_emoji = "🚗" if yetkazish == "DELIVERY" else "🏃"
+    yetkazish_text = "Yetkazib berish" if yetkazish == "DELIVERY" else "Olib ketish"
+
+    # Mahsulotlar ro'yxati
+    products_text = ""
+    if products:
+        for i, p in enumerate(products, 1):
+            products_text += f"  {i}. {p.get('name', 'Mahsulot')} x{p.get('quantity', 1)}\n"
+    else:
+        products_text = f"  • {order_data.get('mahsulot', 'Mahsulot')} x{miqdor}\n"
+
+    # Status emoji va text (API statuslar)
+    status_map = {
+        'PENDING': ('⏳', 'Kutilmoqda'),
+        'ACCEPTED': ('✅', 'Qabul qilindi'),
+        'PREPARING': ('👨‍🍳', 'Tayyorlanmoqda'),
+        'READY': ('🍽', 'Tayyor'),
+        'ON_THE_WAY': ('🚗', 'Yo\'lda'),
+        'DELIVERED': ('📦', 'Yetkazildi'),
+        'COMPLETED': ('✅', 'Bajarildi'),
+        'CANCELLED': ('❌', 'Bekor qilindi'),
+    }
+    status_emoji, status_text = status_map.get(new_status, ('❓', new_status))
+
+    # Vaqtni formatlash
+    time_str = ""
+    if status_time:
+        try:
+            if 'T' in str(status_time):
+                dt = datetime.fromisoformat(str(status_time).replace('Z', '+00:00'))
+                time_str = dt.strftime("%H:%M:%S")
+            else:
+                time_str = str(status_time)
+        except:
+            time_str = datetime.now().strftime("%H:%M:%S")
+
+    # Xabar matni
+    text = f"""📋 <b>BUYURTMA #{order_id}</b>
+
+🏢 {biznes_nomi}
+⏰ Qabul qilingan: {created_at}
+{yetkazish_emoji} {yetkazish_text}
+
+📦 <b>Mahsulotlar:</b>
+{products_text}
+💰 <b>Jami:</b> {summa:,.0f} so'm
+
+📊 <b>Holat:</b> {status_emoji} {status_text}"""
+
+    if time_str:
+        text += f"\n⏱ Yangilangan: {time_str}"
+
+    # Mijoz ma'lumotlarini ko'rsatish (tayyor yoki yetkazilmoqda bo'lganda)
+    if new_status in ['READY', 'ON_THE_WAY', 'DELIVERED', 'COMPLETED']:
+        mijoz_nomi = order_data.get('mijoz_nomi', 'Nomalum')
+        mijoz_tel = order_data.get('mijoz_tel', '')
+        if mijoz_tel:
+            text += f"""
+
+👤 <b>MIJOZ:</b>
+📝 {mijoz_nomi}
+📞 <code>{mijoz_tel}</code>"""
+
+    # Xabarni tahrirlash (tugmalarsiz)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        data = {
+            "chat_id": group_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            msg_data['status'] = new_status
+            logger.info(f"Buyurtma #{order_id} holati yangilandi: {new_status}")
+            return True
+        elif response.status_code == 400:
+            # Xabar o'zgartirilmagan - content ayniy
+            msg_data['status'] = new_status
+            return True
+    except Exception as e:
+        logger.error(f"Buyurtma holatini yangilashda xato: {e}")
+
+    return False
+
+# O'zbekiston viloyatlari
+UZBEKISTAN_REGIONS = {
+    1: "Toshkent shahri",
+    2: "Toshkent viloyati",
+    3: "Andijon viloyati",
+    4: "Buxoro viloyati",
+    5: "Farg'ona viloyati",
+    6: "Jizzax viloyati",
+    7: "Xorazm viloyati",
+    8: "Namangan viloyati",
+    9: "Navoiy viloyati",
+    10: "Qashqadaryo viloyati",
+    11: "Qoraqalpog'iston",
+    12: "Samarqand viloyati",
+    13: "Sirdaryo viloyati",
+    14: "Surxondaryo viloyati",
+}
+
+def fetch_businesses_from_api():
+    """API dan bizneslar ro'yxatini olish"""
+    global businesses_cache, businesses_cache_time
+
+    try:
+        # Cache 5 daqiqa davomida amal qiladi
+        if businesses_cache_time and (datetime.now() - businesses_cache_time).seconds < 300:
+            return businesses_cache
+
+        response = requests.get(NONBOR_BUSINESSES_URL, headers=get_nonbor_headers(), timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                businesses_cache = data
+            elif isinstance(data, dict):
+                businesses_cache = data.get('result', data.get('results', data.get('businesses', data.get('data', []))))
+            businesses_cache_time = datetime.now()
+            logger.info(f"API dan {len(businesses_cache)} ta biznes olindi")
+            return businesses_cache
+    except Exception as e:
+        logger.error(f"Bizneslarni olishda xato: {e}")
+
+    return businesses_cache if businesses_cache else []
+
+def find_business_by_telegram_id(telegram_user_id):
+    """Telegram user ID bo'yicha biznesni topish"""
+    try:
+        # API dan biznesni qidirish
+        url = f"{NONBOR_BASE_URL}/telegram_bot/get-business-by-telegram/"
+        params = {"telegram_id": telegram_user_id}
+        response = requests.get(url, headers=get_nonbor_headers(), params=params, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and data.get('business'):
+                return data.get('business')
+    except Exception as e:
+        logger.error(f"Biznesni telegram_id bo'yicha topishda xato: {e}")
+
+    # Agar API ishlamasa, cache dan qidirish
+    all_businesses = fetch_businesses_from_api()
+    for business in all_businesses:
+        # owner_telegram_id yoki telegram_id maydoni bo'yicha tekshirish
+        owner_tg = business.get('owner_telegram_id') or business.get('telegram_id') or business.get('owner', {}).get('telegram_id')
+        if str(owner_tg) == str(telegram_user_id):
+            return business
+    return None
+
+def get_business_statistics(business_id, telegram_user_id=None):
+    """Biznes statistikasini olish"""
+    try:
+        # API dan statistika olish
+        url = NONBOR_BUSINESS_STATS_URL
+        params = {"business_id": business_id}
+        if telegram_user_id:
+            params["telegram_id"] = telegram_user_id
+
+        response = requests.get(url, headers=get_nonbor_headers(), params=params, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.error(f"Biznes statistikasini olishda xato: {e}")
+
+    return None
+
+def format_business_stats_message(business, stats):
+    """Biznes statistikasi xabarini formatlash"""
+    business_name = business.get('name', 'Noma\'lum')
+
+    # Statistika ma'lumotlari
+    total_orders = stats.get('total_orders', 0)
+    completed = stats.get('completed', 0)
+    cancelled = stats.get('cancelled', 0)
+    in_progress = stats.get('in_progress', 0)
+    pending = stats.get('pending', 0)
+    total_revenue = stats.get('total_revenue', 0)
+    today_orders = stats.get('today_orders', 0)
+    today_revenue = stats.get('today_revenue', 0)
+
+    # Format qilish
+    text = f"""📊 <b>{business_name}</b> statistikasi
+
+📅 <b>Bugungi ko'rsatkichlar:</b>
+   📦 Buyurtmalar: <b>{today_orders}</b> ta
+   💰 Tushum: <b>{today_revenue:,.0f}</b> so'm
+
+📈 <b>Umumiy ko'rsatkichlar:</b>
+   📦 Jami buyurtmalar: <b>{total_orders}</b> ta
+   ✅ Bajarilgan: <b>{completed}</b> ta
+   ❌ Bajarilmagan: <b>{cancelled}</b> ta
+   ⏳ Jarayonda: <b>{in_progress}</b> ta
+   🕐 Kutilmoqda: <b>{pending}</b> ta
+   💵 Jami tushum: <b>{total_revenue:,.0f}</b> so'm
+"""
+
+    # Foiz hisoblash
+    if total_orders > 0:
+        completed_percent = (completed / total_orders) * 100
+        cancelled_percent = (cancelled / total_orders) * 100
+        text += f"""
+📉 <b>Samaradorlik:</b>
+   ✅ Bajarilish: <b>{completed_percent:.1f}%</b>
+   ❌ Bekor qilinish: <b>{cancelled_percent:.1f}%</b>
+"""
+
+    return text
+
+def send_business_owner_stats(chat_id, telegram_user_id):
+    """Biznes egasiga statistika yuborish"""
+    # Biznesni topish
+    business = find_business_by_telegram_id(telegram_user_id)
+
+    if not business:
+        text = """❌ <b>Biznes topilmadi</b>
+
+Sizning Telegram hisobingiz hech qanday biznesga biriktirilmagan.
+
+Biznes egasi bo'lsangiz, admin bilan bog'laning."""
+        send_telegram_message_to_chat(chat_id, text)
+        return False
+
+    business_id = business.get('id')
+    business_name = business.get('title') or business.get('name') or 'Nomalum'
+
+    # Statistikani olish
+    stats = get_business_statistics(business_id, telegram_user_id)
+
+    if stats:
+        text = format_business_stats_message(business, stats)
+    else:
+        # Agar API dan statistika kelmasa, asosiy ma'lumotlarni ko'rsatish
+        text = f"""📊 <b>{business_name}</b>
+
+ℹ️ Statistika ma'lumotlari yuklanmoqda...
+
+Tez orada batafsil statistika mavjud bo'ladi."""
+
+    # Guruh holati
+    group_info = business_telegram_groups.get(business_id)
+    if group_info:
+        g_name = group_info.get('group_name', 'Guruh')
+        text += f"\n\n💬 Ulangan guruh: <b>{g_name}</b>"
+
+    # Keyboard yaratish
+    keyboard = {"inline_keyboard": []}
+
+    # Guruh qo'shish/o'zgartirish tugmasi
+    if group_info:
+        keyboard["inline_keyboard"].append([
+            {"text": "💬 Guruhni o'zgartirish", "callback_data": f"owner_change_group_{business_id}"},
+            {"text": "🗑 Guruhni o'chirish", "callback_data": f"owner_remove_group_{business_id}"}
+        ])
+    else:
+        keyboard["inline_keyboard"].append([
+            {"text": "➕ Guruh qo'shish", "callback_data": f"owner_add_group_{business_id}"}
+        ])
+
+    # Yangilash tugmasi
+    keyboard["inline_keyboard"].append([
+        {"text": "🔄 Yangilash", "callback_data": f"owner_refresh_{business_id}"}
+    ])
+
+    send_telegram_message_to_chat(chat_id, text, keyboard)
+    return True
+
+def send_telegram_message_to_chat(chat_id, text, reply_markup=None):
+    """Istalgan chatga xabar yuborish"""
+    if not TELEGRAM_BOT_TOKEN:
+        return None
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("result", {}).get("message_id")
+    except Exception as e:
+        logger.error(f"Xabar yuborishda xato (chat_id={chat_id}): {e}")
+    return None
+
+def send_telegram_message_with_keyboard(text, keyboard):
+    """Admin chatga keyboard bilan xabar yuborish"""
+    return send_telegram_message_to_chat(ADMIN_CHAT_ID, text, keyboard)
+
+def get_businesses_list_text(page=1, region_id=None, district_id=None):
+    """Bizneslar ro'yxatini yaratish - matn + raqam tugmalari"""
+    global businesses_current_page, businesses_current_region, businesses_current_district, businesses_filtered_list
+
+    businesses_current_page = page
+    businesses_current_region = region_id
+    businesses_current_district = district_id
+
+    all_businesses = fetch_businesses_from_api()
+
+    # Filtrangan ro'yxatni saqlash
+    businesses_filtered_list = all_businesses
+
+    total = len(all_businesses)
+    total_pages = max(1, (total + BUSINESSES_PER_PAGE - 1) // BUSINESSES_PER_PAGE)
+
+    # Pagination
+    start = (page - 1) * BUSINESSES_PER_PAGE
+    end = start + BUSINESSES_PER_PAGE
+    page_businesses = all_businesses[start:end]
+
+    text = f"🏢 <b>FAOL BIZNESLAR</b>\n\n"
+
+    for i, business in enumerate(page_businesses, start + 1):
+        b_id = business.get('id')
+        name = business.get('name') or business.get('title') or 'Noma\'lum'
+        phone = business.get('phone') or business.get('phone_number') or business.get('owner_phone') or ''
+
+        # Telefon raqamini formatlash
+        if phone:
+            phone_clean = phone.replace('+', '').replace(' ', '')
+            if phone_clean.startswith('998') and len(phone_clean) == 12:
+                phone_formatted = f"+{phone_clean[:3]} {phone_clean[3:5]} {phone_clean[5:8]} {phone_clean[8:]}"
+            else:
+                phone_formatted = phone
+        else:
+            phone_formatted = ""
+
+        # Telegram guruh holati
+        group_info = business_telegram_groups.get(b_id)
+        group_emoji = "✅" if group_info else "❌"
+
+        text += f"{group_emoji} <b>{i}. {name}</b>\n"
+        if phone_formatted:
+            text += f"📞 {phone_formatted}\n"
+
+        # Guruh nomi (agar ulangan bo'lsa) - telefon ostida
+        if group_info:
+            g_name = group_info.get('group_name', 'Guruh')
+            g_id = group_info.get('group_id')
+            # Guruh linkini yaratish (private guruhlar uchun t.me/c/xxx/1 format)
+            if g_id and str(g_id).startswith('-100'):
+                chat_id_clean = str(g_id)[4:]  # -100 ni olib tashlash
+                group_link = f"https://t.me/c/{chat_id_clean}/1"
+                text += f"💬 <a href=\"{group_link}\">{g_name}</a>\n"
+            elif g_id and str(g_id).startswith('-'):
+                chat_id_clean = str(g_id)[1:]  # - ni olib tashlash
+                group_link = f"https://t.me/c/{chat_id_clean}/1"
+                text += f"💬 <a href=\"{group_link}\">{g_name}</a>\n"
+            else:
+                text += f"💬 {g_name}\n"
+
+        text += "\n"
+
+    text += f"━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"📊 Jami: <b>{total}</b> ta biznes\n"
+    text += f"📄 Sahifa: <b>{page}/{total_pages}</b>"
+
+    return text, total_pages
+
+def get_business_detail_text(business_id):
+    """Bitta biznes tafsilotlari"""
+    all_businesses = fetch_businesses_from_api()
+    business = None
+    for b in all_businesses:
+        if b.get('id') == business_id:
+            business = b
+            break
+
+    if not business:
+        return "Biznes topilmadi.", None
+
+    name = business.get('name') or business.get('title') or 'Noma\'lum'
+    owner = business.get('owner_name', business.get('owner', {}).get('name', ''))
+    phone = business.get('phone') or business.get('phone_number') or business.get('owner_phone') or ''
+    region = business.get('region', {}).get('name', '') if isinstance(business.get('region'), dict) else ''
+    district = business.get('district', {}).get('name', '') if isinstance(business.get('district'), dict) else ''
+    is_active = business.get('is_active', True)
+
+    # Telegram guruh
+    group_info = business_telegram_groups.get(business_id)
+
+    text = f"""🏢 <b>{name}</b>
+
+📋 <b>Ma'lumotlar:</b>
+   👤 Egasi: {owner or 'Kiritilmagan'}
+   📞 Telefon: {phone or 'Kiritilmagan'}
+   📍 Manzil: {region}, {district}
+   {'🟢 Faol' if is_active else '🔴 Nofaol'}
+
+💬 <b>Telegram guruh:</b>
+"""
+
+    if group_info:
+        text += "   ✅ Ulangan\n"
+        g_name = group_info.get('group_name', 'Nomalum')
+        g_id = group_info.get('group_id', 'Nomalum')
+        text += f"   📝 Nomi: {g_name}\n"
+        text += f"   🆔 ID: {g_id}\n"
+    else:
+        text += "   ❌ Biriktirilmagan\n"
+
+    text += f"\n⏰ Yangilangan: {datetime.now().strftime('%H:%M:%S')}"
+
+    return text, business
+
+def get_business_detail_keyboard(business_id):
+    """Biznes tafsilotlari uchun keyboard"""
+    group_info = business_telegram_groups.get(business_id)
+
+    keyboard = []
+
+    if group_info:
+        keyboard.append([
+            {"text": "✏️ Guruhni tahrirlash", "callback_data": f"biz_edit_group_{business_id}"},
+            {"text": "🗑 Guruhni o'chirish", "callback_data": f"biz_remove_group_{business_id}"}
+        ])
+    else:
+        keyboard.append([
+            {"text": "➕ Guruh qo'shish", "callback_data": f"biz_add_group_{business_id}"}
+        ])
+
+    keyboard.append([
+        {"text": "🔙 Ro'yxatga qaytish", "callback_data": "biz_back_list"}
+    ])
+
+    return {"inline_keyboard": keyboard}
+
+def get_region_business_counts():
+    """Har bir viloyatdagi bizneslar sonini hisoblash"""
+    all_businesses = fetch_businesses_from_api()
+    counts = {}
+    for rid in UZBEKISTAN_REGIONS.keys():
+        count = len([b for b in all_businesses if b.get('region_id') == rid or b.get('region', {}).get('id') == rid])
+        counts[rid] = count
+    return counts
+
+def get_districts_with_businesses(region_id):
+    """Viloyatdagi bizneslari bor tumanlar ro'yxati"""
+    all_businesses = fetch_businesses_from_api()
+    districts = {}
+
+    for b in all_businesses:
+        b_region_id = b.get('region_id') or b.get('region', {}).get('id')
+        if b_region_id == region_id:
+            district = b.get('district', {})
+            if isinstance(district, dict) and district.get('id'):
+                d_id = district.get('id')
+                d_name = district.get('name', f'Tuman #{d_id}')
+                if d_id not in districts:
+                    districts[d_id] = {'name': d_name, 'count': 0}
+                districts[d_id]['count'] += 1
+
+    return districts
+
+def get_businesses_keyboard(page=1, total_pages=1, region_id=None, district_id=None):
+    """Bizneslar uchun inline keyboard - har bir biznes nomini bosib kirish mumkin"""
+    keyboard = []
+    all_businesses = fetch_businesses_from_api()
+
+    # Pagination
+    start = (page - 1) * BUSINESSES_PER_PAGE
+    end = start + BUSINESSES_PER_PAGE
+    page_businesses = all_businesses[start:end]
+
+    # Raqam tugmalari - 7 ta bir qatorda
+    row = []
+    for i, business in enumerate(page_businesses, start + 1):
+        b_id = business.get('id')
+
+        row.append({
+            "text": f"{i}",
+            "callback_data": f"biz_select_{b_id}"
+        })
+
+        # Har 7 ta tugmadan keyin yangi qator
+        if len(row) == 7:
+            keyboard.append(row)
+            row = []
+
+    # Qolgan tugmalarni qo'shish
+    if row:
+        keyboard.append(row)
+
+    # Pagination (agar kerak bo'lsa)
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append({"text": "⬅️ Oldingi", "callback_data": f"biz_page_{page-1}"})
+        nav_row.append({"text": f"{page}/{total_pages}", "callback_data": "biz_info"})
+        if page < total_pages:
+            nav_row.append({"text": "Keyingi ➡️", "callback_data": f"biz_page_{page+1}"})
+        keyboard.append(nav_row)
+
+    # Boshqaruv tugmalari
+    keyboard.append([
+        {"text": "🔄 Yangilash", "callback_data": "biz_refresh"}
+    ])
+    keyboard.append([
+        {"text": "🔙 Asosiy menyu", "callback_data": "menu_back"}
+    ])
+
+    return {"inline_keyboard": keyboard}
+
+def send_businesses_message(page=1, region_id=None, district_id=None):
+    """Bizneslar xabarini yuborish"""
+    text, total_pages = get_businesses_list_text(page, region_id, district_id)
+    keyboard = get_businesses_keyboard(page, total_pages, region_id, district_id)
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("result", {}).get("message_id")
+    except Exception as e:
+        logger.error(f"Bizneslar xabarini yuborishda xato: {e}")
+    return None
+
+def edit_businesses_message(message_id, page=1, region_id=None, district_id=None):
+    """Bizneslar xabarini yangilash"""
+    text, total_pages = get_businesses_list_text(page, region_id, district_id)
+    keyboard = get_businesses_keyboard(page, total_pages, region_id, district_id)
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True
+    except Exception as e:
+        logger.error(f"Bizneslar xabarini yangilashda xato: {e}")
+    return False
+
 def send_stats_with_buttons(period="daily"):
     """Statistika xabarini tugmalar bilan yuborish"""
     text = get_bot_statistics_text(period)
@@ -2595,6 +3773,11 @@ def send_stats_with_buttons(period="daily"):
                 {"text": "📊 Yillik", "callback_data": "stats_yearly"}
             ],
             [
+                {"text": "📦 Buyurtmalar", "callback_data": "menu_orders"},
+                {"text": "📞 Qo'ng'iroqlar", "callback_data": "menu_calls"}
+            ],
+            [
+                {"text": "🏢 Bizneslar", "callback_data": "menu_businesses"},
                 {"text": "🔄 Yangilash", "callback_data": f"stats_{period}"}
             ]
         ]
@@ -2631,6 +3814,11 @@ def edit_stats_message(message_id, period="daily"):
                 {"text": "📊 Yillik", "callback_data": "stats_yearly"}
             ],
             [
+                {"text": "📦 Buyurtmalar", "callback_data": "menu_orders"},
+                {"text": "📞 Qo'ng'iroqlar", "callback_data": "menu_calls"}
+            ],
+            [
+                {"text": "🏢 Bizneslar", "callback_data": "menu_businesses"},
                 {"text": "🔄 Yangilash", "callback_data": f"stats_{period}"}
             ]
         ]
@@ -2665,13 +3853,125 @@ def answer_callback_query(callback_query_id, text=""):
     except Exception as e:
         logger.error(f"Callback query javobida xato: {e}")
 
+def edit_message_with_back(message_id, text):
+    """Xabarni orqaga tugmasi bilan yangilash"""
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 Yangilash", "callback_data": "menu_refresh"},
+                {"text": "🔙 Orqaga", "callback_data": "menu_back"}
+            ]
+        ]
+    }
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True
+    except Exception as e:
+        logger.error(f"Xabarni yangilashda xato: {e}")
+    return False
+
+def edit_message_with_cancel(message_id, text):
+    """Xabarni bekor qilish tugmasi bilan yangilash"""
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "❌ Bekor qilish", "callback_data": "biz_cancel_input"}
+            ]
+        ]
+    }
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True
+    except Exception as e:
+        logger.error(f"Xabarni yangilashda xato: {e}")
+    return False
+
+def edit_message_with_keyboard(message_id, text, keyboard):
+    """Xabarni keyboard bilan yangilash"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True
+    except Exception as e:
+        logger.error(f"Xabarni yangilashda xato: {e}")
+    return False
+
+def send_business_detail(business_id):
+    """Biznes tafsilotlarini yuborish"""
+    text, business = get_business_detail_text(business_id)
+    keyboard = get_business_detail_keyboard(business_id)
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("result", {}).get("message_id")
+    except Exception as e:
+        logger.error(f"Biznes tafsilotini yuborishda xato: {e}")
+    return None
+
+def delete_bot_commands_for_groups():
+    """Guruhlar uchun bot komandalarini o'chirish"""
+    try:
+        # Barcha guruhlar uchun komandalarni o'chirish
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMyCommands"
+        data = {
+            "scope": {
+                "type": "all_group_chats"
+            }
+        }
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200 and response.json().get("ok"):
+            logger.info("Guruhlar uchun bot komandalari o'chirildi")
+        else:
+            logger.warning(f"Bot komandalarini o'chirishda xato: {response.text}")
+    except Exception as e:
+        logger.error(f"Bot komandalarini o'chirishda xato: {e}")
+
 async def telegram_bot_polling():
     """Telegram bot buyruqlarini tinglash"""
-    global telegram_last_update_id
+    global telegram_last_update_id, waiting_for_group_id, selected_business_id, businesses_cache_time, waiting_for_phone_edit, pending_phone_change, owner_waiting_for_group
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_ADMIN_CHAT_ID:
         logger.warning("Telegram credentials yo'q - bot polling o'chirilgan")
         return
+
+    # Guruhlar uchun komandalarni o'chirish
+    delete_bot_commands_for_groups()
 
     logger.info("Telegram bot polling boshlandi...")
 
@@ -2710,12 +4010,353 @@ async def telegram_bot_polling():
                                         edit_stats_message(cb_message_id, period)
                                         answer_callback_query(cb_id, f"✅ {period.capitalize()} statistika")
                                         logger.info(f"Telegram: {period} statistika so'raldi")
+
+                                # Menu tugmalari
+                                elif cb_data == "menu_orders":
+                                    text = get_orders_list_text()
+                                    edit_message_with_back(cb_message_id, text)
+                                    answer_callback_query(cb_id, "📦 Buyurtmalar")
+                                    logger.info("Telegram: Buyurtmalar so'raldi")
+
+                                elif cb_data == "menu_calls":
+                                    text = get_calls_history_text()
+                                    edit_message_with_back(cb_message_id, text)
+                                    answer_callback_query(cb_id, "📞 Qo'ng'iroqlar")
+                                    logger.info("Telegram: Qo'ng'iroqlar so'raldi")
+
+                                elif cb_data == "menu_businesses":
+                                    edit_businesses_message(cb_message_id, 1, None, None)
+                                    answer_callback_query(cb_id, "🏢 Bizneslar")
+                                    logger.info("Telegram: Bizneslar so'raldi")
+
+                                # Bizneslar tugmalari
+                                elif cb_data.startswith("biz_page_"):
+                                    page = int(cb_data.replace("biz_page_", ""))
+                                    edit_businesses_message(cb_message_id, page, businesses_current_region, businesses_current_district)
+                                    answer_callback_query(cb_id, f"📄 {page}-sahifa")
+                                    logger.info(f"Telegram: Bizneslar {page}-sahifa")
+
+                                elif cb_data.startswith("biz_region_"):
+                                    region_id = int(cb_data.replace("biz_region_", ""))
+                                    edit_businesses_message(cb_message_id, 1, region_id, None)
+                                    region_name = UZBEKISTAN_REGIONS.get(region_id, "")
+                                    answer_callback_query(cb_id, f"📍 {region_name}")
+                                    logger.info(f"Telegram: Bizneslar {region_name} filtri")
+
+                                elif cb_data.startswith("biz_district_"):
+                                    district_id = int(cb_data.replace("biz_district_", ""))
+                                    # Agar shu tuman tanlangan bo'lsa - o'chirish
+                                    new_district = None if businesses_current_district == district_id else district_id
+                                    edit_businesses_message(cb_message_id, 1, businesses_current_region, new_district)
+                                    answer_callback_query(cb_id, f"🏘 Tuman tanlandi")
+                                    logger.info(f"Telegram: Bizneslar tuman #{district_id} filtri")
+
+                                elif cb_data == "biz_refresh":
+                                    businesses_cache_time = None  # Cache ni tozalash
+                                    edit_businesses_message(cb_message_id, businesses_current_page, businesses_current_region, businesses_current_district)
+                                    answer_callback_query(cb_id, "🔄 Yangilandi")
+                                    logger.info("Telegram: Bizneslar yangilandi")
+
+                                elif cb_data == "biz_clear":
+                                    edit_businesses_message(cb_message_id, 1, None, None)
+                                    answer_callback_query(cb_id, "❌ Filtr tozalandi")
+                                    logger.info("Telegram: Bizneslar filtri tozalandi")
+
+                                elif cb_data == "biz_info":
+                                    answer_callback_query(cb_id, f"📄 {businesses_current_page}-sahifa")
+
+                                elif cb_data.startswith("biz_select_"):
+                                    # Biznes tanlandi - tafsilotlarni ko'rsatish
+                                    b_id = int(cb_data.replace("biz_select_", ""))
+                                    text, business = get_business_detail_text(b_id)
+                                    keyboard = get_business_detail_keyboard(b_id)
+                                    edit_message_with_keyboard(cb_message_id, text, keyboard)
+                                    business_name = business.get('title', business.get('name', 'Biznes')) if business else 'Biznes'
+                                    answer_callback_query(cb_id, f"🏢 {business_name[:30]}")
+                                    logger.info(f"Telegram: Biznes #{b_id} tafsilotlari")
+
+                                elif cb_data.startswith("biz_add_group_") or cb_data.startswith("biz_edit_group_"):
+                                    selected_business_id = int(cb_data.split("_")[-1])
+                                    waiting_for_group_id = True
+                                    # Guruh ID so'rash xabari
+                                    prompt_text = """💬 <b>TELEGRAM GURUH QO'SHISH</b>
+
+Guruh ID va nomini quyidagi formatda yuboring:
+
+<code>-1001234567890 Guruh nomi</code>
+
+Guruh ID ni olish uchun:
+1. Botni guruhga qo'shing
+2. @userinfobot dan guruh ID sini oling
+
+🔙 Bekor qilish uchun /cancel yuboring"""
+                                    edit_message_with_cancel(cb_message_id, prompt_text)
+                                    answer_callback_query(cb_id, "💬 Guruh ID kiriting")
+                                    logger.info(f"Telegram: Biznes #{selected_business_id} uchun guruh qo'shish")
+
+                                elif cb_data.startswith("biz_remove_group_"):
+                                    b_id = int(cb_data.split("_")[-1])
+                                    if b_id in business_telegram_groups:
+                                        del business_telegram_groups[b_id]
+                                        save_business_groups()  # Faylga saqlash
+                                        logger.info(f"Biznes #{b_id} guruhi o'chirildi")
+                                    # Biznes tafsilotlariga qaytish
+                                    text, business = get_business_detail_text(b_id)
+                                    keyboard = get_business_detail_keyboard(b_id)
+                                    edit_message_with_keyboard(cb_message_id, text, keyboard)
+                                    answer_callback_query(cb_id, "🗑 Guruh o'chirildi")
+
+                                elif cb_data == "biz_back_list":
+                                    edit_businesses_message(cb_message_id, businesses_current_page, businesses_current_region, businesses_current_district)
+                                    answer_callback_query(cb_id, "🔙 Ro'yxat")
+                                    logger.info("Telegram: Bizneslar ro'yxatiga qaytildi")
+
+                                elif cb_data == "biz_cancel_input":
+                                    waiting_for_group_id = False
+                                    waiting_for_phone_edit = False
+                                    selected_business_id = None
+                                    pending_phone_change.clear()
+                                    edit_businesses_message(cb_message_id, businesses_current_page, businesses_current_region, businesses_current_district)
+                                    answer_callback_query(cb_id, "❌ Bekor qilindi")
+
+                                # Telefon raqamini o'zgartirish
+                                elif cb_data.startswith("biz_edit_phone_"):
+                                    b_id = int(cb_data.split("_")[-1])
+                                    selected_business_id = b_id
+                                    waiting_for_phone_edit = True
+                                    logger.info(f"DEBUG: Phone edit mode ON - b_id={b_id}, waiting_for_phone_edit={waiting_for_phone_edit}")
+
+                                    # Joriy telefon raqamini olish
+                                    all_businesses = fetch_businesses_from_api()
+                                    current_phone = ""
+                                    for b in all_businesses:
+                                        if b.get('id') == b_id:
+                                            current_phone = b.get('phone') or b.get('phone_number') or b.get('owner_phone') or ''
+                                            break
+
+                                    prompt_text = f"""📞 <b>Telefon raqamini o'zgartirish</b>
+
+Joriy telefon: <code>{current_phone or 'Kiritilmagan'}</code>
+
+Yangi telefon raqamini yuboring:
+Masalan: <code>+998901234567</code>
+
+🔙 Bekor qilish uchun tugmani bosing"""
+                                    keyboard = {"inline_keyboard": [[{"text": "❌ Bekor qilish", "callback_data": "biz_cancel_phone"}]]}
+                                    edit_message_with_keyboard(cb_message_id, prompt_text, keyboard)
+                                    answer_callback_query(cb_id, "📞 Yangi raqam kiriting")
+                                    logger.info(f"Telegram: Biznes #{b_id} telefon o'zgartirish")
+
+                                elif cb_data == "biz_cancel_phone":
+                                    waiting_for_phone_edit = False
+                                    b_id = selected_business_id
+                                    selected_business_id = None
+                                    pending_phone_change.clear()
+                                    if b_id:
+                                        text, business = get_business_detail_text(b_id)
+                                        keyboard = get_business_detail_keyboard(b_id)
+                                        edit_message_with_keyboard(cb_message_id, text, keyboard)
+                                    answer_callback_query(cb_id, "❌ Bekor qilindi")
+
+                                elif cb_data == "biz_confirm_phone":
+                                    # Telefon o'zgarishini tasdiqlash
+                                    if pending_phone_change:
+                                        b_id = pending_phone_change.get('business_id')
+                                        new_phone = pending_phone_change.get('new_phone')
+
+                                        # API ga yangi telefon yuborish
+                                        try:
+                                            api_url = f"https://test.nonbor.uz/api/v2/telegram_bot/update-business-phone/"
+                                            headers = {
+                                                "Content-Type": "application/json",
+                                                "X-Telegram-Bot-Secret": NONBOR_API_SECRET
+                                            }
+                                            payload = {
+                                                "business_id": b_id,
+                                                "phone": new_phone
+                                            }
+                                            response = requests.post(api_url, json=payload, headers=headers, timeout=10)
+
+                                            if response.status_code == 200:
+                                                # Cache ni tozalash
+                                                businesses_cache.clear()
+
+                                                send_telegram_message(f"✅ Telefon muvaffaqiyatli o'zgartirildi!\n\n📞 Yangi raqam: <code>{new_phone}</code>")
+                                                logger.info(f"Biznes #{b_id} telefon o'zgartirildi: {new_phone}")
+                                            else:
+                                                send_telegram_message(f"❌ Xatolik: {response.status_code}\n{response.text[:200]}")
+                                                logger.error(f"Telefon o'zgartirishda xato: {response.status_code} - {response.text}")
+                                        except Exception as e:
+                                            send_telegram_message(f"❌ Xatolik: {str(e)}")
+                                            logger.error(f"Telefon o'zgartirishda xato: {e}")
+
+                                        pending_phone_change.clear()
+                                        waiting_for_phone_edit = False
+                                        selected_business_id = None
+
+                                        # Biznes tafsilotlarini ko'rsatish
+                                        send_business_detail(b_id)
+                                    answer_callback_query(cb_id, "✅ Tasdiqlandi")
+
+                                elif cb_data == "biz_reject_phone":
+                                    # Telefon o'zgarishini rad etish
+                                    b_id = pending_phone_change.get('business_id')
+                                    pending_phone_change.clear()
+                                    waiting_for_phone_edit = False
+                                    selected_business_id = None
+                                    if b_id:
+                                        text, business = get_business_detail_text(b_id)
+                                        keyboard = get_business_detail_keyboard(b_id)
+                                        edit_message_with_keyboard(cb_message_id, text, keyboard)
+                                    answer_callback_query(cb_id, "❌ Bekor qilindi")
+
+                                elif cb_data == "menu_back":
+                                    edit_stats_message(cb_message_id, "daily")
+                                    answer_callback_query(cb_id, "🔙 Orqaga")
+                                    logger.info("Telegram: Orqaga qaytildi")
+
+                                elif cb_data == "menu_refresh":
+                                    # Joriy sahifani yangilash
+                                    answer_callback_query(cb_id, "🔄 Yangilandi")
+                                    logger.info("Telegram: Sahifa yangilandi")
+
+                            else:
+                                # Biznes egasi callback handerlari (admin bo'lmagan chatlar)
+                                cb_from_user = callback_query.get("from", {})
+                                cb_telegram_user_id = cb_from_user.get("id")
+
+                                # Guruh qo'shish
+                                if cb_data.startswith("owner_add_group_") or cb_data.startswith("owner_change_group_"):
+                                    b_id = int(cb_data.split("_")[-1])
+                                    owner_waiting_for_group[cb_chat_id] = {
+                                        "business_id": b_id,
+                                        "telegram_user_id": cb_telegram_user_id
+                                    }
+                                    prompt_text = """💬 <b>Guruh qo'shish</b>
+
+1️⃣ Avval botni guruhga qo'shing
+2️⃣ Guruhda <code>/getid</code> buyrug'ini yuboring
+3️⃣ Bot guruh ID sini ko'rsatadi
+4️⃣ Shu ID ni menga yuboring
+
+<b>Format:</b> <code>-1001234567890 Guruh nomi</code>"""
+                                    cancel_keyboard = {"inline_keyboard": [[{"text": "❌ Bekor qilish", "callback_data": "owner_cancel_group"}]]}
+                                    send_telegram_message_to_chat(cb_chat_id, prompt_text, cancel_keyboard)
+                                    answer_callback_query(cb_id, "💬 Guruh ID kiriting")
+                                    logger.info(f"Biznes egasi guruh qo'shmoqda: business_id={b_id}")
+
+                                # Guruhni o'chirish
+                                elif cb_data.startswith("owner_remove_group_"):
+                                    b_id = int(cb_data.split("_")[-1])
+                                    if b_id in business_telegram_groups:
+                                        del business_telegram_groups[b_id]
+                                        save_business_groups()
+                                        send_telegram_message_to_chat(cb_chat_id, "✅ Guruh muvaffaqiyatli o'chirildi!")
+                                        # Statistikani qayta ko'rsatish
+                                        send_business_owner_stats(cb_chat_id, cb_telegram_user_id)
+                                        answer_callback_query(cb_id, "✅ Guruh o'chirildi")
+                                        logger.info(f"Biznes egasi guruhni o'chirdi: business_id={b_id}")
+                                    else:
+                                        answer_callback_query(cb_id, "❌ Guruh topilmadi")
+
+                                # Yangilash
+                                elif cb_data.startswith("owner_refresh_"):
+                                    b_id = int(cb_data.split("_")[-1])
+                                    send_business_owner_stats(cb_chat_id, cb_telegram_user_id)
+                                    answer_callback_query(cb_id, "🔄 Yangilandi")
+
+                                # Bekor qilish
+                                elif cb_data == "owner_cancel_group":
+                                    if cb_chat_id in owner_waiting_for_group:
+                                        del owner_waiting_for_group[cb_chat_id]
+                                    send_telegram_message_to_chat(cb_chat_id, "❌ Bekor qilindi")
+                                    answer_callback_query(cb_id, "❌ Bekor qilindi")
+
                             continue
 
                         # Oddiy xabar
                         message = update.get("message", {})
                         chat_id = message.get("chat", {}).get("id")
                         text = message.get("text", "")
+
+                        # DEBUG: Telefon o'zgartirish holati
+                        if text and not text.startswith("/"):
+                            logger.info(f"DEBUG: text='{text}', waiting_for_phone_edit={waiting_for_phone_edit}, selected_business_id={selected_business_id}")
+
+                        # Guruh xabarlarini tekshirish (chat_id manfiy bo'lsa - bu guruh)
+                        is_group_chat = chat_id and int(chat_id) < 0
+
+                        # Guruhda /getid buyrug'i - guruh ID sini ko'rsatish
+                        if is_group_chat and text in ["/getid", "/getid@nonborsupport_bot", "/getid@Nonborbuyurtmalar_bot"]:
+                            group_title = message.get("chat", {}).get("title", "Bu guruh")
+                            getid_text = f"""🆔 <b>Guruh ma'lumotlari</b>
+
+📝 Nomi: <b>{group_title}</b>
+🆔 ID: <code>{chat_id}</code>
+
+Botga yuborish uchun quyidagini nusxalang:
+<code>{chat_id} {group_title}</code>"""
+                            send_telegram_message_to_chat(chat_id, getid_text)
+                            logger.info(f"Guruh ID so'raldi: {chat_id} ({group_title})")
+                            continue
+
+                        # @botname bilan kelgan buyruqlarni guruhlarda e'tiborsiz qoldirish
+                        if is_group_chat and "@" in text:
+                            # Guruhdan kelgan @botname buyruqlari e'tiborsiz qoldiriladi
+                            logger.debug(f"Guruhdan kelgan buyruq e'tiborsiz qoldirildi: {text}")
+                            continue
+
+                        # Telegram user ID ni olish
+                        from_user = message.get("from", {})
+                        telegram_user_id = from_user.get("id")
+                        user_first_name = from_user.get("first_name", "")
+
+                        # Biznes egasi /stats buyrug'i - shaxsiy chatda
+                        if not is_group_chat and text in ["/start", "/stats", "/statistika", "/stats@nonborsupport_bot"]:
+                            # Admin bo'lmasa - biznes egasi sifatida tekshirish
+                            if str(chat_id) != str(TELEGRAM_ADMIN_CHAT_ID):
+                                logger.info(f"Biznes egasi statistika so'radi: {telegram_user_id} ({user_first_name})")
+                                send_business_owner_stats(chat_id, telegram_user_id)
+                                continue
+
+                        # Biznes egasi guruh ID yubormoqda
+                        if not is_group_chat and chat_id in owner_waiting_for_group and text and not text.startswith("/"):
+                            owner_data = owner_waiting_for_group[chat_id]
+                            b_id = owner_data.get("business_id")
+
+                            try:
+                                parts = text.strip().split(" ", 1)
+                                group_id = parts[0]
+                                group_name = parts[1] if len(parts) > 1 else "Telegram guruh"
+
+                                # Guruh ID ni tekshirish
+                                if not group_id.startswith("-"):
+                                    send_telegram_message_to_chat(chat_id, "❌ Noto'g'ri format. Guruh ID '-' bilan boshlanishi kerak.\n\nMasalan: <code>-1001234567890 Guruh nomi</code>")
+                                    continue
+
+                                # Guruh ma'lumotlarini saqlash
+                                business_telegram_groups[b_id] = {
+                                    "group_id": group_id,
+                                    "group_name": group_name
+                                }
+                                save_business_groups()
+
+                                # Holatni tozalash
+                                del owner_waiting_for_group[chat_id]
+
+                                # Muvaffaqiyat xabari
+                                success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}"
+                                send_telegram_message_to_chat(chat_id, success_text)
+
+                                # Statistikani qayta ko'rsatish
+                                send_business_owner_stats(chat_id, telegram_user_id)
+                                logger.info(f"Biznes egasi guruh qo'shdi: business_id={b_id}, group_id={group_id}")
+
+                            except Exception as e:
+                                send_telegram_message_to_chat(chat_id, f"❌ Xato: {e}\n\nTo'g'ri format: <code>-1001234567890 Guruh nomi</code>")
+                                logger.error(f"Biznes egasi guruh qo'shishda xato: {e}")
+
+                            continue
 
                         # Faqat admin chat_id dan kelgan xabarlarga javob berish
                         if str(chat_id) == str(TELEGRAM_ADMIN_CHAT_ID):
@@ -2744,10 +4385,131 @@ Buyurtma kelganda:
 📆 Haftalik - Oxirgi 7 kun
 🗓 Oylik - Oxirgi 30 kun
 📊 Yillik - Oxirgi 1 yil
+
+<b>Boshqaruv tugmalari:</b>
+📦 Buyurtmalar - Kutilayotgan buyurtmalar
+📞 Qo'ng'iroqlar - Qo'ng'iroqlar tarixi
+👨‍💼 Sotuvchilar - Faol sotuvchilar
+🏢 Bizneslar - Barcha bizneslar (viloyat filtri bilan)
 🔄 Yangilash - Ma'lumotlarni yangilash
 """
                                 send_telegram_message(help_text)
                                 logger.info(f"Telegram: /help buyrug'iga javob yuborildi")
+
+                            elif text == "/cancel":
+                                # Guruh qo'shishni bekor qilish
+                                if waiting_for_group_id:
+                                    waiting_for_group_id = False
+                                    selected_business_id = None
+                                    send_businesses_message(businesses_current_page, businesses_current_region, businesses_current_district)
+                                    logger.info("Telegram: Guruh qo'shish bekor qilindi")
+                                elif waiting_for_phone_edit:
+                                    waiting_for_phone_edit = False
+                                    b_id = selected_business_id
+                                    selected_business_id = None
+                                    pending_phone_change.clear()
+                                    if b_id:
+                                        send_business_detail(b_id)
+                                    logger.info("Telegram: Telefon o'zgartirish bekor qilindi")
+                                else:
+                                    send_telegram_message("❌ Bekor qilinadigan jarayon yo'q")
+
+                            elif waiting_for_phone_edit and selected_business_id:
+                                # Telefon raqamini qabul qilish va tasdiqlash
+                                new_phone = text.strip()
+
+                                # Telefon raqamini tekshirish
+                                phone_clean = new_phone.replace('+', '').replace(' ', '').replace('-', '')
+                                if not phone_clean.isdigit() or len(phone_clean) < 9:
+                                    send_telegram_message("❌ Noto'g'ri telefon raqam formati.\n\nMasalan: <code>+998901234567</code>")
+                                    continue
+
+                                # +998 bilan formatlash
+                                if phone_clean.startswith('998') and len(phone_clean) == 12:
+                                    new_phone = f"+{phone_clean}"
+                                elif len(phone_clean) == 9 and phone_clean[0] in '789':
+                                    new_phone = f"+998{phone_clean}"
+                                elif not new_phone.startswith('+'):
+                                    new_phone = f"+{phone_clean}"
+
+                                # Tasdiqlash uchun saqlash
+                                pending_phone_change['business_id'] = selected_business_id
+                                pending_phone_change['new_phone'] = new_phone
+
+                                # Joriy telefon raqamini olish
+                                all_businesses = fetch_businesses_from_api()
+                                current_phone = ""
+                                business_name = ""
+                                for b in all_businesses:
+                                    if b.get('id') == selected_business_id:
+                                        current_phone = b.get('phone') or b.get('phone_number') or b.get('owner_phone') or ''
+                                        business_name = b.get('title') or b.get('name') or ''
+                                        break
+
+                                # Tasdiqlash xabari
+                                confirm_text = f"""⚠️ <b>Telefon raqamini o'zgartirishni tasdiqlang</b>
+
+🏢 Biznes: <b>{business_name}</b>
+
+📞 Joriy raqam: <code>{current_phone or 'Kiritilmagan'}</code>
+📱 Yangi raqam: <code>{new_phone}</code>
+
+O'zgarishni tasdiqlaysizmi?"""
+
+                                keyboard = {"inline_keyboard": [
+                                    [
+                                        {"text": "✅ Tasdiqlash", "callback_data": "biz_confirm_phone"},
+                                        {"text": "❌ Bekor qilish", "callback_data": "biz_reject_phone"}
+                                    ]
+                                ]}
+                                send_telegram_message_with_keyboard(confirm_text, keyboard)
+                                logger.info(f"Telefon o'zgartirish tasdiqlanmoqda: {current_phone} -> {new_phone}")
+
+                            elif waiting_for_group_id and selected_business_id:
+                                # Guruh ID va nomini qabul qilish
+                                try:
+                                    parts = text.strip().split(" ", 1)
+                                    group_id = parts[0]
+                                    group_name = parts[1] if len(parts) > 1 else "Telegram guruh"
+
+                                    # Guruh ID ni tekshirish
+                                    if not group_id.startswith("-"):
+                                        send_telegram_message("❌ Noto'g'ri format. Guruh ID '-' bilan boshlanishi kerak.\n\nMasalan: <code>-1001234567890 Guruh nomi</code>")
+                                        continue
+
+                                    # Guruh ma'lumotlarini saqlash
+                                    business_telegram_groups[selected_business_id] = {
+                                        "group_id": group_id,
+                                        "group_name": group_name
+                                    }
+                                    save_business_groups()  # Faylga saqlash
+
+                                    waiting_for_group_id = False
+                                    b_id = selected_business_id
+                                    selected_business_id = None
+
+                                    # Muvaffaqiyat xabari va biznes tafsilotlari
+                                    success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}"
+                                    send_telegram_message(success_text)
+
+                                    # Biznes tafsilotlarini ko'rsatish
+                                    send_business_detail(b_id)
+                                    logger.info(f"Biznes #{b_id} ga guruh qo'shildi: {group_id}")
+
+                                except Exception as e:
+                                    send_telegram_message(f"❌ Xato: {e}\n\nTo'g'ri format: <code>-1001234567890 Guruh nomi</code>")
+                                    logger.error(f"Guruh qo'shishda xato: {e}")
+
+                            elif text.isdigit() and businesses_filtered_list:
+                                # Biznesni raqam bo'yicha tanlash
+                                num = int(text)
+                                if 1 <= num <= len(businesses_filtered_list):
+                                    business = businesses_filtered_list[num - 1]
+                                    b_id = business.get('id')
+                                    send_business_detail(b_id)
+                                    logger.info(f"Telegram: Biznes #{b_id} tanlandi")
+                                else:
+                                    send_telegram_message(f"❌ Noto'g'ri raqam. 1 dan {len(businesses_filtered_list)} gacha raqam kiriting.")
 
             await asyncio.sleep(1)
 
@@ -2761,6 +4523,7 @@ async def on_startup(app):
     """Server ishga tushganda polling boshlash"""
     asyncio.create_task(polling_task())
     asyncio.create_task(telegram_bot_polling())
+    asyncio.create_task(cleanup_task())
 
 
 def create_app():
