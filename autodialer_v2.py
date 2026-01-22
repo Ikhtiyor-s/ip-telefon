@@ -2057,9 +2057,8 @@ async def handle_test_telegram(request):
 
 async def handle_test_alert(request):
     """
-    Test uchun Telegram ogohlantirish yuborish
-    Bu endpoint hozirgi PENDING buyurtmalar uchun darhol Telegram xabar yuboradi
-    Keyin status o'zgarganda xabar yangilanishini test qilish mumkin
+    Hozirgi CHECKING buyurtmalarni Telegram ga yuborish
+    Bu endpoint barcha kutilayotgan buyurtmalar uchun darhol Telegram xabar yuboradi
     """
     try:
         # Barcha buyurtmalarni olish
@@ -2067,50 +2066,59 @@ async def handle_test_alert(request):
         pending = [o for o in all_orders if o.get('state') == ORDER_STATUS_CHECKING]
 
         if not pending:
-            return web.json_response({"status": "error", "message": "PENDING buyurtma yo'q"})
+            return web.json_response({"status": "error", "message": "CHECKING buyurtma yo'q"})
 
-        # Biznes bo'yicha guruhlash
-        orders_by_business = {}
+        # Sotuvchi telefon raqami bo'yicha guruhlash
+        orders_by_seller = {}
         for order in pending:
             business = order.get('business', {})
             biznes_nomi = business.get('title', 'Noma\'lum')
 
-            if biznes_nomi not in orders_by_business:
-                orders_by_business[biznes_nomi] = {
+            # Sotuvchi telefon raqamini olish
+            seller_phone = (
+                business.get('phone') or
+                business.get('seller_phone') or
+                order.get('seller_phone') or
+                biznes_nomi  # Agar telefon topilmasa, biznes nomini ishlatamiz
+            )
+
+            if seller_phone not in orders_by_seller:
+                orders_by_seller[seller_phone] = {
                     "seller_name": biznes_nomi,
-                    "seller_phone": biznes_nomi,  # Biznes nomini key sifatida ishlatamiz
+                    "seller_phone": seller_phone,
                     "seller_address": business.get('address', 'Noma\'lum'),
                     "orders": []
                 }
 
             # Buyurtma ma'lumotlarini qo'shish
             user = order.get('user', {})
-            orders_by_business[biznes_nomi]["orders"].append({
+            mijoz_nomi = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Noma\'lum'
+            orders_by_seller[seller_phone]["orders"].append({
                 "lead_id": order.get('id'),
                 "order_number": order.get('id'),
-                "client_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Noma\'lum',
-                "client_phone": user.get('phone', 'Noma\'lum'),
-                "product_name": "Buyurtma",
-                "quantity": 1,
-                "price": order.get('total_price', 0)
+                "mijoz_nomi": mijoz_nomi,
+                "mijoz_tel": user.get('phone', 'Noma\'lum'),
+                "mahsulot": "Buyurtma",
+                "miqdor": 1,
+                "narx": order.get('total_price', 0)
             })
 
             # order_to_seller mapping
-            order_to_seller[order.get('id')] = biznes_nomi
+            order_to_seller[order.get('id')] = seller_phone
 
-        # Har bir biznes uchun Telegram xabar yuborish
+        # Har bir sotuvchi uchun Telegram xabar yuborish
         sent_count = 0
-        for biznes_nomi, seller_orders in orders_by_business.items():
-            result = send_seller_orders_alert(seller_orders, call_attempts=2)
+        for seller_phone, seller_orders in orders_by_seller.items():
+            result = send_seller_orders_alert(seller_orders, call_attempts=0)
             if result:
                 sent_count += 1
-                logger.info(f"✅ Test alert yuborildi: {biznes_nomi}, {len(seller_orders['orders'])} ta buyurtma")
+                logger.info(f"✅ Alert yuborildi: {seller_phone}, {len(seller_orders['orders'])} ta buyurtma")
 
         return web.json_response({
             "status": "ok",
-            "message": f"{sent_count} ta biznes uchun Telegram xabar yuborildi",
-            "businesses": list(orders_by_business.keys()),
-            "seller_messages": list(seller_messages.keys())
+            "message": f"{sent_count} ta sotuvchi uchun Telegram xabar yuborildi",
+            "total_orders": len(pending),
+            "sellers": list(orders_by_seller.keys())
         })
 
     except Exception as e:

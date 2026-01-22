@@ -1559,6 +1559,76 @@ async def handle_test(request):
         "time": datetime.now().isoformat()
     })
 
+async def handle_test_alert(request):
+    """
+    Hozirgi CHECKING buyurtmalarni Telegram ga yuborish
+    Bu endpoint barcha kutilayotgan buyurtmalar uchun darhol Telegram xabar yuboradi
+    """
+    try:
+        # Barcha buyurtmalarni olish
+        all_orders = get_all_orders()
+        pending = [o for o in all_orders if o.get('state') == ORDER_STATUS_CHECKING]
+
+        if not pending:
+            return web.json_response({"status": "error", "message": "CHECKING buyurtma yo'q"})
+
+        # Sotuvchi telefon raqami bo'yicha guruhlash
+        orders_by_seller = {}
+        for order in pending:
+            business = order.get('business', {})
+            biznes_nomi = business.get('title', 'Noma\'lum')
+
+            # Sotuvchi telefon raqamini olish
+            seller_phone = (
+                business.get('phone') or
+                business.get('seller_phone') or
+                order.get('seller_phone') or
+                biznes_nomi
+            )
+
+            if seller_phone not in orders_by_seller:
+                orders_by_seller[seller_phone] = {
+                    "seller_name": biznes_nomi,
+                    "seller_phone": seller_phone,
+                    "seller_address": business.get('address', 'Noma\'lum'),
+                    "orders": []
+                }
+
+            # Buyurtma ma'lumotlarini qo'shish
+            user = order.get('user', {})
+            mijoz_nomi = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Noma\'lum'
+            orders_by_seller[seller_phone]["orders"].append({
+                "lead_id": order.get('id'),
+                "order_number": order.get('id'),
+                "mijoz_nomi": mijoz_nomi,
+                "mijoz_tel": user.get('phone', 'Noma\'lum'),
+                "mahsulot": "Buyurtma",
+                "miqdor": 1,
+                "narx": order.get('total_price', 0)
+            })
+
+            # order_to_seller mapping
+            order_to_seller[order.get('id')] = seller_phone
+
+        # Har bir sotuvchi uchun Telegram xabar yuborish
+        sent_count = 0
+        for seller_phone, seller_orders in orders_by_seller.items():
+            result = send_seller_orders_alert(seller_orders, call_attempts=0)
+            if result:
+                sent_count += 1
+                logger.info(f"Alert yuborildi: {seller_phone}, {len(seller_orders['orders'])} ta buyurtma")
+
+        return web.json_response({
+            "status": "ok",
+            "message": f"{sent_count} ta sotuvchi uchun Telegram xabar yuborildi",
+            "total_orders": len(pending),
+            "sellers": list(orders_by_seller.keys())
+        })
+
+    except Exception as e:
+        logger.error(f"Test alert xatosi: {e}")
+        return web.json_response({"status": "error", "message": str(e)})
+
 @rate_limit_middleware
 async def handle_check_leads(request):
     """Hozirgi CHECKING buyurtmalarni ko'rsatish"""
@@ -1798,6 +1868,7 @@ def create_app():
 
     app.router.add_post('/call-result', handle_call_result)
     app.router.add_get('/test', handle_test)
+    app.router.add_get('/test-alert', handle_test_alert)  # Telegram ga buyurtmalarni yuborish
     app.router.add_get('/check-leads', handle_check_leads)
 
     app.router.add_post('/api/webhook/order-status', handle_order_webhook)
