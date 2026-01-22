@@ -24,6 +24,9 @@ SIP_SERVER = "well-tech.sip.uz"
 
 # Telegram Bot - ENVIRONMENT VARIABLES dan
 import os
+from dotenv import load_dotenv
+load_dotenv()  # .env faylni yuklash
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ADMIN_CHAT_ID = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "")
 
@@ -2472,9 +2475,292 @@ async def handle_call_history(request):
     })
 
 
+# ============ TELEGRAM BOT COMMANDS ============
+telegram_last_update_id = 0
+from datetime import timedelta
+
+def get_date_range(period):
+    """Davr uchun sana oralig'ini hisoblash"""
+    today = datetime.now().date()
+    if period == "daily":
+        return [today.strftime('%Y-%m-%d')]
+    elif period == "weekly":
+        # Oxirgi 7 kun
+        return [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
+    elif period == "monthly":
+        # Oxirgi 30 kun
+        return [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(30)]
+    elif period == "yearly":
+        # Oxirgi 365 kun
+        return [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(365)]
+    return [today.strftime('%Y-%m-%d')]
+
+def get_period_statistics(period="daily"):
+    """Davr bo'yicha statistika olish"""
+    dates = get_date_range(period)
+
+    # Qo'ng'iroqlar statistikasi
+    total_calls = 0
+    answered = 0
+    unanswered = 0
+    first_attempt = 0
+    second_attempt = 0
+
+    for date in dates:
+        day_calls = call_statistics["by_date"].get(date, {})
+        total_calls += day_calls.get("total", 0)
+        answered += day_calls.get("answered", 0)
+        unanswered += day_calls.get("unanswered", 0)
+        first_attempt += day_calls.get("first_attempt", 0)
+        second_attempt += day_calls.get("second_attempt", 0)
+
+    # Buyurtmalar statistikasi
+    total_orders = 0
+    accepted = 0
+    cancelled = 0
+
+    for date in dates:
+        day_orders = order_statistics["by_date"].get(date, {})
+        total_orders += day_orders.get("total", 0)
+        accepted += day_orders.get("accepted", 0)
+        cancelled += day_orders.get("cancelled", 0)
+
+    return {
+        "total_calls": total_calls,
+        "answered": answered,
+        "unanswered": unanswered,
+        "first_attempt": first_attempt,
+        "second_attempt": second_attempt,
+        "total_orders": total_orders,
+        "accepted": accepted,
+        "cancelled": cancelled
+    }
+
+def get_bot_statistics_text(period="daily"):
+    """Statistika matnini yaratish"""
+    stats = get_period_statistics(period)
+
+    # Davr nomi
+    period_names = {
+        "daily": "📅 Bugun",
+        "weekly": "📆 Oxirgi 7 kun",
+        "monthly": "🗓 Oxirgi 30 kun",
+        "yearly": "📊 Oxirgi 1 yil"
+    }
+    period_name = period_names.get(period, "📅 Bugun")
+
+    # Hozirgi holat
+    current_pending = len(pending_orders)
+    current_processed = len(processed_orders)
+    active_sellers = len(seller_order_groups)
+
+    text = f"""📊 <b>NONBOR AUTODIALER STATISTIKA</b>
+
+<b>{period_name}:</b>
+
+📞 <b>Qo'ng'iroqlar:</b>
+   Jami: {stats['total_calls']} ta
+   ✅ Javob berildi: {stats['answered']}
+   ❌ Javob berilmadi: {stats['unanswered']}
+   1️⃣ 1-urinishda: {stats['first_attempt']}
+   2️⃣ 2-urinishda: {stats['second_attempt']}
+
+📦 <b>Buyurtmalar:</b>
+   Jami: {stats['total_orders']} ta
+   ✅ Qabul qilindi: {stats['accepted']}
+   ❌ Bekor qilindi: {stats['cancelled']}
+
+🔄 <b>Hozirgi holat:</b>
+   Kutilayotgan: {current_pending} ta
+   Qayta ishlangan: {current_processed} ta
+   Faol sotuvchilar: {active_sellers} ta
+
+⏰ Yangilangan: {datetime.now().strftime('%H:%M:%S')}
+"""
+    return text
+
+def send_stats_with_buttons(period="daily"):
+    """Statistika xabarini tugmalar bilan yuborish"""
+    text = get_bot_statistics_text(period)
+
+    # Inline keyboard tugmalari
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "📅 Kunlik", "callback_data": "stats_daily"},
+                {"text": "📆 Haftalik", "callback_data": "stats_weekly"}
+            ],
+            [
+                {"text": "🗓 Oylik", "callback_data": "stats_monthly"},
+                {"text": "📊 Yillik", "callback_data": "stats_yearly"}
+            ],
+            [
+                {"text": "🔄 Yangilash", "callback_data": f"stats_{period}"}
+            ]
+        ]
+    }
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            logger.info(f"Statistika tugmalar bilan yuborildi ({period})")
+            return response.json().get("result", {}).get("message_id")
+    except Exception as e:
+        logger.error(f"Tugmali xabar yuborishda xato: {e}")
+    return None
+
+def edit_stats_message(message_id, period="daily"):
+    """Mavjud xabarni yangilash"""
+    text = get_bot_statistics_text(period)
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "📅 Kunlik", "callback_data": "stats_daily"},
+                {"text": "📆 Haftalik", "callback_data": "stats_weekly"}
+            ],
+            [
+                {"text": "🗓 Oylik", "callback_data": "stats_monthly"},
+                {"text": "📊 Yillik", "callback_data": "stats_yearly"}
+            ],
+            [
+                {"text": "🔄 Yangilash", "callback_data": f"stats_{period}"}
+            ]
+        ]
+    }
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": TELEGRAM_ADMIN_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(keyboard)
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            logger.info(f"Statistika xabari yangilandi ({period})")
+            return True
+    except Exception as e:
+        logger.error(f"Xabarni yangilashda xato: {e}")
+    return False
+
+def answer_callback_query(callback_query_id, text=""):
+    """Callback query ga javob berish"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+        payload = {
+            "callback_query_id": callback_query_id,
+            "text": text
+        }
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logger.error(f"Callback query javobida xato: {e}")
+
+async def telegram_bot_polling():
+    """Telegram bot buyruqlarini tinglash"""
+    global telegram_last_update_id
+
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_ADMIN_CHAT_ID:
+        logger.warning("Telegram credentials yo'q - bot polling o'chirilgan")
+        return
+
+    logger.info("Telegram bot polling boshlandi...")
+
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            params = {
+                "offset": telegram_last_update_id + 1,
+                "timeout": 30,
+                "allowed_updates": ["message", "callback_query"]
+            }
+
+            response = requests.get(url, params=params, timeout=35)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if data.get("ok") and data.get("result"):
+                    for update in data["result"]:
+                        telegram_last_update_id = update["update_id"]
+
+                        # Callback query (tugma bosilganda)
+                        callback_query = update.get("callback_query")
+                        if callback_query:
+                            cb_id = callback_query.get("id")
+                            cb_data = callback_query.get("data", "")
+                            cb_message = callback_query.get("message", {})
+                            cb_chat_id = cb_message.get("chat", {}).get("id")
+                            cb_message_id = cb_message.get("message_id")
+
+                            if str(cb_chat_id) == str(TELEGRAM_ADMIN_CHAT_ID):
+                                # Statistika tugmalari
+                                if cb_data.startswith("stats_"):
+                                    period = cb_data.replace("stats_", "")
+                                    if period in ["daily", "weekly", "monthly", "yearly"]:
+                                        edit_stats_message(cb_message_id, period)
+                                        answer_callback_query(cb_id, f"✅ {period.capitalize()} statistika")
+                                        logger.info(f"Telegram: {period} statistika so'raldi")
+                            continue
+
+                        # Oddiy xabar
+                        message = update.get("message", {})
+                        chat_id = message.get("chat", {}).get("id")
+                        text = message.get("text", "")
+
+                        # Faqat admin chat_id dan kelgan xabarlarga javob berish
+                        if str(chat_id) == str(TELEGRAM_ADMIN_CHAT_ID):
+                            if text == "/start" or text == "/stats" or text == "/statistika":
+                                send_stats_with_buttons("daily")
+                                logger.info(f"Telegram: /start buyrug'iga javob yuborildi")
+
+                            elif text == "/help":
+                                help_text = """🤖 <b>NONBOR AUTODIALER BOT</b>
+
+<b>Buyruqlar:</b>
+/start - Statistikani ko'rish
+/stats - Statistikani ko'rish
+/help - Yordam
+
+<b>Bot vazifasi:</b>
+Qabul qilinmagan buyurtmalar haqida xabar yuborish.
+
+Buyurtma kelganda:
+1. 90 sek kutiladi
+2. 2 marta qo'ng'iroq qilinadi
+3. Javob bermasa - bu botga xabar yuboriladi
+
+<b>Statistika tugmalari:</b>
+📅 Kunlik - Bugungi statistika
+📆 Haftalik - Oxirgi 7 kun
+🗓 Oylik - Oxirgi 30 kun
+📊 Yillik - Oxirgi 1 yil
+🔄 Yangilash - Ma'lumotlarni yangilash
+"""
+                                send_telegram_message(help_text)
+                                logger.info(f"Telegram: /help buyrug'iga javob yuborildi")
+
+            await asyncio.sleep(1)
+
+        except requests.exceptions.Timeout:
+            continue
+        except Exception as e:
+            logger.error(f"Telegram bot polling xatosi: {e}")
+            await asyncio.sleep(5)
+
 async def on_startup(app):
     """Server ishga tushganda polling boshlash"""
     asyncio.create_task(polling_task())
+    asyncio.create_task(telegram_bot_polling())
 
 
 def create_app():
