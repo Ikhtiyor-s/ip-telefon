@@ -1329,6 +1329,24 @@ async def process_seller_orders(seller_phone, order_ids, business_info, language
     Args:
         language: Sotuvchi ilova tili (uz, ru, en)
     """
+    # ===== CALLING_ENABLED TEKSHIRISH =====
+    business_id = business_info.get('business_id') or business_info.get('id')
+    group_info = business_telegram_groups.get(business_id) if business_id else None
+    calling_enabled = True  # Default: qo'ng'iroq yoqilgan
+
+    if group_info:
+        calling_enabled = group_info.get('calling_enabled', True)
+
+    if not calling_enabled:
+        logger.info(f"⚠️ Biznes #{business_id} ({business_info.get('name', 'Noma\'lum')}) uchun qo'ng'iroq o'chirilgan. Faqat Telegram xabar yuboriladi.")
+        # Faqat Telegram xabar yuborish (allaqachon guruhga yuborilgan)
+        # Sotuvchi task dan chiqish
+        if seller_phone in seller_order_groups:
+            del seller_order_groups[seller_phone]
+        return
+
+    logger.info(f"📞 Biznes #{business_id} uchun qo'ng'iroq yoqilgan. Qo'ng'iroq jarayoni boshlanmoqda...")
+
     # Til aniqlash
     seller_language = language or business_info.get('language') or DEFAULT_LANGUAGE
     logger.info(f"Sotuvchi {seller_phone}: Til = {seller_language}")
@@ -2260,6 +2278,25 @@ async def handle_order_webhook(request):
             order_statistics["total_orders"] += 1
             order_statistics["by_date"][today]["total"] += 1
             order_statistics["by_seller"][seller_name]["total"] += 1
+
+            # ===== YANGI: GURUHGA XABAR YUBORISH =====
+            business_id = data.get('business_id') or data.get('business', {}).get('id')
+            if business_id:
+                # Buyurtma ma'lumotlarini to'plash
+                order_data_for_group = {
+                    'biznes_nomi': seller_name,
+                    'summa': data.get('total_price') or data.get('price', 0),
+                    'yetkazish': data.get('delivery_type', 'DELIVERY'),
+                    'products': data.get('products', []),
+                    'created_at': data.get('created_at', datetime.now().isoformat()),
+                    'miqdor': data.get('quantity', 1),
+                    'mahsulot': data.get('product_name', 'Mahsulot')
+                }
+
+                # Guruhga xabar yuborish
+                message_id = send_order_to_business_group(order_id, business_id, order_data_for_group)
+                if message_id:
+                    logger.info(f"✅ Biznes #{business_id} guruhiga xabar yuborildi (message_id: {message_id})")
 
         # ===== TELEGRAM XABARNI YANGILASH =====
         # Sotuvchi telefoni yoki nomi bo'yicha mapping
@@ -3336,6 +3373,19 @@ def fetch_businesses_from_api():
 
     return businesses_cache if businesses_cache else []
 
+def get_business_by_id(business_id):
+    """Biznesni ID bo'yicha olish"""
+    try:
+        all_businesses = fetch_businesses_from_api()
+        for business in all_businesses:
+            if business.get('id') == business_id:
+                return business
+        logger.warning(f"Biznes #{business_id} topilmadi")
+        return None
+    except Exception as e:
+        logger.error(f"Biznesni olishda xato: {e}")
+        return None
+
 def find_business_by_telegram_id(telegram_user_id):
     """Telegram user ID bo'yicha biznesni topish"""
     try:
@@ -3611,6 +3661,11 @@ def get_business_detail_text(business_id):
         g_id = group_info.get('group_id', 'Nomalum')
         text += f"   📝 Nomi: {g_name}\n"
         text += f"   🆔 ID: {g_id}\n"
+
+        # Qo'ng'iroq holati
+        calling_enabled = group_info.get('calling_enabled', True)
+        calling_status = "✅ Yoqilgan" if calling_enabled else "❌ O'chirilgan"
+        text += f"\n📞 <b>Qo'ng'iroq:</b> {calling_status}\n"
     else:
         text += "   ❌ Biriktirilmagan\n"
 
@@ -3628,6 +3683,13 @@ def get_business_detail_keyboard(business_id):
         keyboard.append([
             {"text": "✏️ Guruhni tahrirlash", "callback_data": f"biz_edit_group_{business_id}"},
             {"text": "🗑 Guruhni o'chirish", "callback_data": f"biz_remove_group_{business_id}"}
+        ])
+
+        # Qo'ng'iroqni yoqish/o'chirish tugmasi
+        calling_enabled = group_info.get('calling_enabled', True)
+        toggle_text = "📞 Qo'ng'iroqni o'chirish" if calling_enabled else "📞 Qo'ng'iroqni yoqish"
+        keyboard.append([
+            {"text": toggle_text, "callback_data": f"biz_toggle_calling_{business_id}"}
         ])
     else:
         keyboard.append([
@@ -4106,6 +4168,28 @@ Guruh ID ni olish uchun:
                                     edit_message_with_keyboard(cb_message_id, text, keyboard)
                                     answer_callback_query(cb_id, "🗑 Guruh o'chirildi")
 
+                                elif cb_data.startswith("biz_toggle_calling_"):
+                                    # Qo'ng'iroqni yoqish/o'chirish
+                                    b_id = int(cb_data.split("_")[-1])
+                                    if b_id in business_telegram_groups:
+                                        # Hozirgi holatni olish
+                                        current_status = business_telegram_groups[b_id].get('calling_enabled', True)
+                                        # Holatni o'zgartirish
+                                        new_status = not current_status
+                                        business_telegram_groups[b_id]['calling_enabled'] = new_status
+                                        save_business_groups()  # Faylga saqlash
+
+                                        status_text = "yoqildi" if new_status else "o'chirildi"
+                                        logger.info(f"Biznes #{b_id} uchun qo'ng'iroq {status_text}")
+
+                                        # Biznes tafsilotlarini yangilash
+                                        text, business = get_business_detail_text(b_id)
+                                        keyboard = get_business_detail_keyboard(b_id)
+                                        edit_message_with_keyboard(cb_message_id, text, keyboard)
+                                        answer_callback_query(cb_id, f"📞 Qo'ng'iroq {status_text}")
+                                    else:
+                                        answer_callback_query(cb_id, "❌ Guruh topilmadi")
+
                                 elif cb_data == "biz_back_list":
                                     edit_businesses_message(cb_message_id, businesses_current_page, businesses_current_region, businesses_current_district)
                                     answer_callback_query(cb_id, "🔙 Ro'yxat")
@@ -4336,8 +4420,13 @@ Botga yuborish uchun quyidagini nusxalang:
 
                                 # Guruh ma'lumotlarini saqlash
                                 business_telegram_groups[b_id] = {
+                                    "business_id": b_id,
+                                    "business_name": business.get('name', business.get('title', 'Noma\'lum')),
                                     "group_id": group_id,
-                                    "group_name": group_name
+                                    "group_name": group_name,
+                                    "calling_enabled": True,  # Default: qo'ng'iroq yoqilgan
+                                    "added_at": datetime.now().isoformat(),
+                                    "added_by": "business_owner"
                                 }
                                 save_business_groups()
 
@@ -4345,7 +4434,7 @@ Botga yuborish uchun quyidagini nusxalang:
                                 del owner_waiting_for_group[chat_id]
 
                                 # Muvaffaqiyat xabari
-                                success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}"
+                                success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}\n📞 Qo'ng'iroq: Yoqilgan"
                                 send_telegram_message_to_chat(chat_id, success_text)
 
                                 # Statistikani qayta ko'rsatish
@@ -4478,9 +4567,18 @@ O'zgarishni tasdiqlaysizmi?"""
                                         continue
 
                                     # Guruh ma'lumotlarini saqlash
+                                    # Biznes ma'lumotlarini olish
+                                    biz_info = get_business_by_id(selected_business_id)
+                                    biz_name = biz_info.get('name', biz_info.get('title', 'Noma\'lum')) if biz_info else 'Noma\'lum'
+
                                     business_telegram_groups[selected_business_id] = {
+                                        "business_id": selected_business_id,
+                                        "business_name": biz_name,
                                         "group_id": group_id,
-                                        "group_name": group_name
+                                        "group_name": group_name,
+                                        "calling_enabled": True,  # Default: qo'ng'iroq yoqilgan
+                                        "added_at": datetime.now().isoformat(),
+                                        "added_by": "admin"
                                     }
                                     save_business_groups()  # Faylga saqlash
 
@@ -4489,7 +4587,7 @@ O'zgarishni tasdiqlaysizmi?"""
                                     selected_business_id = None
 
                                     # Muvaffaqiyat xabari va biznes tafsilotlari
-                                    success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}"
+                                    success_text = f"✅ Guruh muvaffaqiyatli qo'shildi!\n\n📝 Nomi: {group_name}\n🆔 ID: {group_id}\n📞 Qo'ng'iroq: Yoqilgan"
                                     send_telegram_message(success_text)
 
                                     # Biznes tafsilotlarini ko'rsatish
