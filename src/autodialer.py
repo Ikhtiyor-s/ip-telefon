@@ -44,6 +44,7 @@ from services import (
     StatsCallResult,
     OrderResult
 )
+from api_server import AutodialerAPI
 
 # Logging - UTF-8 encoding (Windows cp1251 muammosini hal qilish)
 import sys as _sys
@@ -313,6 +314,10 @@ class AutodialerPro:
             self.telegram = None
             self.notification_manager = None
             self.stats_handler = None
+
+        # HTTP API server (admin panel uchun)
+        api_port = int(os.getenv("API_PORT", "8585"))
+        self.api_server = AutodialerAPI(autodialer=self, port=api_port)
 
         logger.info("AutodialerPro yaratildi")
 
@@ -584,6 +589,10 @@ class AutodialerPro:
         # Ishga tushganda sinxronizatsiya - Nonbor API va Telegram
         await self._sync_on_startup()
 
+        # HTTP API server ishga tushirish
+        logger.info("API server ishga tushirish...")
+        await self.api_server.start()
+
         # Asosiy loop
         logger.info("=" * 60)
         logger.info("AUTODIALER PRO ISHLAYAPTI")
@@ -602,6 +611,9 @@ class AutodialerPro:
         """Autodialer ni to'xtatish"""
         logger.info("Autodialer to'xtatilmoqda...")
         self._running = False
+
+        # API server to'xtatish
+        await self.api_server.stop()
 
         # Tasks ni bekor qilish
         for task in self._tasks:

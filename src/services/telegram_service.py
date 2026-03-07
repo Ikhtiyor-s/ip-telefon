@@ -142,6 +142,10 @@ class TelegramService:
         if self._session and not self._session.closed:
             await self._session.close()
 
+    async def get_chat_info(self, chat_id: str) -> Optional[Dict]:
+        """Chat ma'lumotlarini olish (nomi, turi)"""
+        return await self._make_request("getChat", {"chat_id": chat_id})
+
     async def _make_request(
         self,
         method: str,
