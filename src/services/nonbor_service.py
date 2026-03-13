@@ -44,6 +44,11 @@ class NonborService:
         self._session: Optional[aiohttp.ClientSession] = None
         self._consecutive_errors: int = 0
 
+        # Orders cache - bir polling intervalda faqat 1 ta API so'rov
+        self._orders_cache: Optional[List[Dict]] = None
+        self._orders_cache_time: float = 0
+        self._orders_cache_ttl: float = 4.0  # 4 soniya cache (5s polling dan kam)
+
         logger.info(f"Nonbor servisi ishga tushdi")
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -146,13 +151,23 @@ class NonborService:
             logger.debug(f"Order details endpoint xato: {e}")
         return None
 
-    async def get_orders(self) -> Optional[List[Dict]]:
+    async def get_orders(self, force: bool = False) -> Optional[List[Dict]]:
         """
-        Barcha buyurtmalarni olish
+        Barcha buyurtmalarni olish (cache bilan - 4s TTL)
+
+        Args:
+            force: True bo'lsa cache ni e'tiborsiz qoldiradi
 
         Returns:
             Buyurtmalar ro'yxati yoki None agar xato yuz bergan bo'lsa
         """
+        import time
+        now = time.monotonic()
+
+        # Cache dan qaytarish (4s ichida takroriy so'rov bo'lsa)
+        if not force and self._orders_cache is not None and (now - self._orders_cache_time) < self._orders_cache_ttl:
+            return self._orders_cache
+
         data = await self._make_request("GET", "telegram_bot/get-order-for-courier/")
         if data is None:
             return None
@@ -167,6 +182,10 @@ class NonborService:
                 s = o.get("state", "unknown")
                 states[s] = states.get(s, 0) + 1
             logger.info(f"API buyurtmalar: {len(results)} ta, statuslar: {states}")
+
+        # Cache ni yangilash
+        self._orders_cache = results
+        self._orders_cache_time = now
         return results
 
     async def get_orders_by_business(self, business_id: int) -> List[Dict]:
