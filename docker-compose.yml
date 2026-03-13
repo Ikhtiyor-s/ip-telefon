@@ -2,8 +2,6 @@
 # AUTODIALER PRO - DOCKER COMPOSE
 # =============================================================================
 
-version: '3.8'
-
 services:
   # ===========================================================================
   # ASTERISK PBX
@@ -17,7 +15,7 @@ services:
       - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.conf:/etc/asterisk/manager.conf:ro
-      - ./audio:/var/lib/asterisk/sounds/autodialer
+      - autodialer-audio:/var/lib/asterisk/sounds/autodialer
       - asterisk-logs:/var/log/asterisk
     environment:
       - TZ=Asia/Tashkent
@@ -34,29 +32,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: autodialer-pro:latest
     container_name: autodialer-pro
     restart: unless-stopped
     depends_on:
       asterisk:
         condition: service_healthy
     volumes:
-      - ./audio:/app/audio
+      - autodialer-audio:/app/audio
       - ./logs:/app/logs
-    environment:
-      - AMOCRM_SUBDOMAIN=${AMOCRM_SUBDOMAIN}
-      - AMOCRM_TOKEN=${AMOCRM_TOKEN}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - SELLER_PHONE=${SELLER_PHONE}
-      - AMI_HOST=127.0.0.1
-      - AMI_PORT=5038
-      - AMI_USERNAME=autodialer
-      - AMI_PASSWORD=autodialer123
-      - WAIT_BEFORE_CALL=${WAIT_BEFORE_CALL:-90}
-      - TELEGRAM_ALERT_TIME=${TELEGRAM_ALERT_TIME:-180}
-      - MAX_CALL_ATTEMPTS=${MAX_CALL_ATTEMPTS:-3}
-      - TZ=Asia/Tashkent
+      - ./data:/app/data
+    env_file:
+      - .env.production
     network_mode: host
 
 volumes:
+  autodialer-audio:
   asterisk-logs:
