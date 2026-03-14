@@ -309,7 +309,8 @@ class AutodialerAPI:
             enabled = False
 
         self._stats_handler._save_call_settings()
-        logger.info(f"Biznes #{biz_id} avtoqo'ng'iroq: {'yoqildi' if enabled else 'o\\'chirildi'}")
+        status = "yoqildi" if enabled else "o'chirildi"
+        logger.info(f"Biznes #{biz_id} avtoqo'ng'iroq: {status}")
         return self._json({"success": True, "call_enabled": enabled})
 
     async def get_business_config(self, request):
