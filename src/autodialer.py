@@ -206,6 +206,7 @@ class AutodialerPro:
         telegram_alert_time: int = 180,  # 3 daqiqa
         max_call_attempts: int = 2,
         retry_interval: int = 30,  # 30 soniya (birinchi qo'ng'iroqdan keyin)
+        planned_reminder_time: int = 60,  # Reja buyurtma eslatma vaqti (daqiqa)
         # Yo'llar
         audio_dir: str = "audio",
         # Platform
@@ -217,6 +218,7 @@ class AutodialerPro:
         self.telegram_alert_time = telegram_alert_time
         self.max_call_attempts = max_call_attempts
         self.retry_interval = retry_interval
+        self.planned_reminder_time = planned_reminder_time
         self.audio_dir = Path(audio_dir)
         self.skip_asterisk = skip_asterisk
 
@@ -377,7 +379,7 @@ class AutodialerPro:
 
     async def _check_planned_reminders(self):
         """
-        Reja buyurtmalar uchun 20 daqiqa oldin eslatma yuborish VA QO'NG'IROQ QILISH.
+        Reja buyurtmalar uchun 60 daqiqa (1 soat) oldin eslatma yuborish VA QO'NG'IROQ QILISH.
         Qabul qilingan (ACCEPTED/READY) reja buyurtmalarning vaqti yaqinlashganda
         biznes guruhiga eslatma xabar yuboriladi va sotuvchiga qo'ng'iroq qilinadi.
         """
@@ -415,8 +417,8 @@ class AutodialerPro:
                     planned_dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00'))
                     minutes_left = (planned_dt - now).total_seconds() / 60
 
-                    # 20 daqiqa yoki kamroq qolgan bo'lsa (lekin o'tmagan bo'lsa)
-                    if 0 <= minutes_left <= 20:
+                    # planned_reminder_time daqiqa oldin eslatma
+                    if 0 <= minutes_left <= self.planned_reminder_time:
                         biz_id = tracked.get("biz_id", "")
                         chat_id = tracked.get("chat_id", "")
                         if chat_id and biz_id:
@@ -454,7 +456,7 @@ class AutodialerPro:
                         text += f"\n     🏷 {o['product_name']}"
                     text += "\n"
 
-                text += f"\n❗❗❗ Tayyorlashni boshlang!"
+                text += f"\n❗❗❗ {self.planned_reminder_time} daqiqa qoldi! Tayyorlashni boshlang!"
 
                 try:
                     await self.telegram.send_message(
@@ -729,10 +731,28 @@ class AutodialerPro:
 
     async def _main_loop(self):
         """Asosiy ishlash sikli"""
+        ami_check_counter = 0
         while self._running:
             try:
                 await self._check_and_process()
                 await asyncio.sleep(1)
+
+                # Har 60 sekundda AMI ulanishni tekshirish va qayta ulanish
+                if not self.skip_asterisk:
+                    ami_check_counter += 1
+                    if ami_check_counter >= 60:
+                        ami_check_counter = 0
+                        if not self.ami._connected:
+                            logger.info("AMI ulanish uzilgan, avtomatik qayta ulanish...")
+                            try:
+                                reconnected = await self.ami.reconnect()
+                                if reconnected:
+                                    logger.info("AMI qayta ulanish muvaffaqiyatli!")
+                                else:
+                                    logger.warning("AMI qayta ulanish muvaffaqiyatsiz, 60s dan keyin qayta uriniladi")
+                            except Exception as e:
+                                logger.warning(f"AMI reconnect xatosi: {e}")
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -895,10 +915,14 @@ class AutodialerPro:
     async def _update_group_messages_internal(self, new_order_ids: set = None):
         """Internal: Lock ichida chaqiriladi"""
         if not self.stats_handler:
+            logger.debug("Guruh xabarlari: stats_handler yo'q, o'tkazib yuborildi")
             return
         try:
             orders = await self.nonbor.get_orders()
             if not orders:
+                if new_order_ids:
+                    logger.warning(f"Guruh xabarlari: get_orders() bo'sh qaytdi, {len(new_order_ids)} ta buyurtma qayta navbatga qo'shildi")
+                    self._pending_group_message_orders.update(new_order_ids)
                 return
 
             # Biznes title -> ID mapping (businesses cache dan)
@@ -1120,6 +1144,7 @@ class AutodialerPro:
                         # Xabar yuborilayotgan buyurtma sifatida belgilash
                         self._sending_order_messages.add(order_id)
                         try:
+                            logger.info(f"Guruhga xabar yuborilmoqda: buyurtma #{order_id}, chat_id={group_chat_id}, status={display_status}")
                             msg_id = await self.telegram.send_business_order_message(
                                 order_data=order_data, chat_id=group_chat_id
                             )
@@ -1132,7 +1157,14 @@ class AutodialerPro:
                                     "order_data": order_data,
                                 }
                                 self._save_group_messages()
-                                logger.info(f"Guruhga xabar yuborildi: buyurtma #{order_id}, status: {display_status}")
+                                logger.info(f"Guruhga xabar yuborildi: buyurtma #{order_id}, msg_id={msg_id}, status: {display_status}")
+                            else:
+                                logger.error(f"Guruhga xabar YUBORILMADI: buyurtma #{order_id}, chat_id={group_chat_id} - Telegram None qaytardi")
+                                # Qayta urinish uchun navbatga qo'shish
+                                self._pending_group_message_orders.add(order_id)
+                        except Exception as send_err:
+                            logger.error(f"Guruhga xabar yuborishda xato: buyurtma #{order_id}: {send_err}")
+                            self._pending_group_message_orders.add(order_id)
                         finally:
                             # Yuborish tugadi - ro'yxatdan o'chirish
                             self._sending_order_messages.discard(order_id)
@@ -1156,7 +1188,13 @@ class AutodialerPro:
                 self._save_group_messages()
 
         except Exception as e:
-            logger.error(f"Guruh xabarlarini yangilashda xato: {e}")
+            logger.error(f"Guruh xabarlarini yangilashda xato: {e}", exc_info=True)
+            # Xato bo'lsa, yuborilmagan buyurtmalarni qayta navbatga qo'shish
+            if new_order_ids:
+                unsent = new_order_ids - set(self._group_order_messages.keys())
+                if unsent:
+                    self._pending_group_message_orders.update(unsent)
+                    logger.info(f"Guruh xabarlari xato: {len(unsent)} ta buyurtma qayta navbatga qo'shildi")
 
     async def _on_new_orders(self, count: int, new_ids: list):
         """Yangi buyurtmalar callback"""
@@ -1464,6 +1502,15 @@ class AutodialerPro:
             self.state.call_in_progress = False
             self.state.reset()  # call_started=False va waiting_for_call=False - qo'ng'iroq siklini tugatish
             return
+
+        # AMI ulanishni tekshirish va kerak bo'lsa qayta ulanish
+        if not self.ami._connected:
+            logger.warning("AMI ulanish uzilgan, qayta ulanmoqda...")
+            reconnected = await self.ami.reconnect()
+            if not reconnected:
+                logger.error("AMI qayta ulanish muvaffaqiyatsiz! Qo'ng'iroq qilib bo'lmaydi")
+                self.state.call_in_progress = False
+                return
 
         # Qo'ng'iroq jarayonini boshlash - yangi buyurtmalar keyingi qo'ng'iroqqa qoladi
         self.state.call_in_progress = True
@@ -2070,6 +2117,7 @@ async def main():
         telegram_alert_time=int(os.getenv("TELEGRAM_ALERT_TIME", "180")),
         max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
         retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
+        planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
 
         # Platform
         skip_asterisk=skip_asterisk,

@@ -255,7 +255,7 @@ class AsteriskAMI:
         """AMI ulanishni faol tutish uchun ping yuborish"""
         while self._connected:
             try:
-                await asyncio.sleep(30)  # Har 30 soniyada
+                await asyncio.sleep(10)  # Har 10 soniyada (AMI idle timeout dan oldin)
                 if self._connected and self._writer:
                     await self._send_action("Ping")
                     logger.debug("AMI Ping yuborildi")

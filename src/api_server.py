@@ -240,54 +240,31 @@ class AutodialerAPI:
     # ===== BUSINESSES =====
 
     async def get_businesses(self, request):
-        """Bizneslar ro'yxati (Nonbor API dan + guruh/config ma'lumotlari)"""
+        """Barcha Nonbor bizneslarni ko'rsatish (guruh/config ma'lumotlari bilan)"""
         businesses = []
         if self.autodialer and self.autodialer.nonbor:
-            orders = await self.autodialer.nonbor.get_orders()
-            if orders:
-                # Bizneslarni yig'ish
-                biz_map = {}
-                for o in orders:
-                    biz = o.get("business") or {}
-                    biz_id = biz.get("id")
-                    if biz_id and biz_id not in biz_map:
-                        biz_map[biz_id] = {
-                            "id": biz_id,
-                            "title": biz.get("title", ""),
-                            "phone": biz.get("phone", ""),
-                            "image": biz.get("image", ""),
-                        }
-
-                # Guruh va config qo'shish
-                for biz_id, biz_data in biz_map.items():
-                    call_enabled = True
-                    group_id = ""
-                    config = {}
-                    if self._stats_handler:
-                        call_enabled = self._stats_handler.is_call_enabled(biz_id)
-                        group_id = self._stats_handler._business_groups.get(str(biz_id), "")
-                        config = self._stats_handler.get_business_config(biz_id)
-
-                    biz_data["call_enabled"] = call_enabled
-                    biz_data["group_id"] = group_id
-                    biz_data["max_call_attempts"] = config.get("max_call_attempts")
-                    biz_data["retry_interval"] = config.get("retry_interval")
-                    businesses.append(biz_data)
-
-        # Agar hozir buyurtma yo'q bo'lsa — fayldan business_groups ni ko'rish
-        if not businesses and self._stats_handler:
-            for biz_id_str, group_id in self._stats_handler._business_groups.items():
-                try:
-                    biz_id = int(biz_id_str)
-                except ValueError:
+            # Nonbor API dan BARCHA bizneslarni olish
+            all_biz = await self.autodialer.nonbor.get_businesses()
+            for biz in all_biz:
+                biz_id = biz.get("id")
+                if not biz_id:
                     continue
-                config = self._stats_handler.get_business_config(biz_id)
+
+                call_enabled = True
+                group_id = ""
+                config = {}
+                if self._stats_handler:
+                    call_enabled = self._stats_handler.is_call_enabled(biz_id)
+                    group_id = self._stats_handler._business_groups.get(str(biz_id), "")
+                    config = self._stats_handler.get_business_config(biz_id)
+
                 businesses.append({
                     "id": biz_id,
-                    "title": f"Biznes #{biz_id}",
-                    "phone": "",
-                    "image": "",
-                    "call_enabled": self._stats_handler.is_call_enabled(biz_id),
+                    "title": biz.get("title", ""),
+                    "phone": biz.get("phone_number", "") or biz.get("phone", ""),
+                    "image": biz.get("image", ""),
+                    "address": biz.get("address", ""),
+                    "call_enabled": call_enabled,
                     "group_id": group_id,
                     "max_call_attempts": config.get("max_call_attempts"),
                     "retry_interval": config.get("retry_interval"),
@@ -448,6 +425,7 @@ class AutodialerAPI:
             "telegram_chat_id": tg_chat_id,
             "ami_host": os.getenv("AMI_HOST", "127.0.0.1"),
             "ami_port": int(os.getenv("AMI_PORT", "5038")),
+            "planned_reminder_time": ad.planned_reminder_time,
         })
 
     async def update_config(self, request):
@@ -482,6 +460,11 @@ class AutodialerAPI:
             ad.call_manager.retry_interval = ad.retry_interval
             env_changes["RETRY_INTERVAL"] = str(ad.retry_interval)
             changed.append(f"retry_interval={ad.retry_interval}")
+
+        if "planned_reminder_time" in body:
+            ad.planned_reminder_time = int(body["planned_reminder_time"])
+            env_changes["PLANNED_REMINDER_TIME"] = str(ad.planned_reminder_time)
+            changed.append(f"planned_reminder_time={ad.planned_reminder_time}")
 
         # === Telegram sozlamalari (real-time) ===
         if "telegram_chat_id" in body:
