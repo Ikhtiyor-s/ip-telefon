@@ -137,6 +137,7 @@ class AutodialerState:
         self.new_order_ids_for_call: list = []  # Yangi qo'ng'iroq qilish uchun buyurtmalar
         self.order_timestamps: dict = {}  # {order_id: datetime} - Har bir buyurtmaning kelgan vaqti
         self.last_communicated_orders: dict = {}  # {seller_phone: [order_ids]} - Har bir sotuvchiga oxirgi marta qaysi buyurtmalar haqida xabar berilgan
+        self.unanswered_sellers: set = set()  # Javob bermagan sotuvchilar — keyingi siklda faqat 1 urinish
         self.call_in_progress: bool = False  # Hozir qo'ng'iroq jarayonida
         self.global_retry_count: int = 0  # Global qayta urinish hisoblagichi - barcha buyurtmalar uchun
         self.last_telegram_order_ids: set = set()  # Oxirgi marta Telegram ga yuborilgan buyurtmalar ID lari
@@ -1216,6 +1217,8 @@ class AutodialerPro:
                 self.state.last_communicated_orders[_sp] = _still
             else:
                 del self.state.last_communicated_orders[_sp]
+                # Buyurtmalari hal qilindi — unanswered dan ham tozalash
+                self.state.unanswered_sellers.discard(_sp)
                 logger.debug(f"Sotuvchi {_sp}: barcha buyurtmalari hal qilindi, tozalandi")
 
         # MUHIM: Allaqachon qo'ng'iroq qilingan/xabar berilgan buyurtmalarni topish (tozalangan ma'lumot bilan)
@@ -1652,7 +1655,14 @@ class AutodialerPro:
                 biz_config = self.stats_handler.get_business_config(seller_biz_id)
             biz_max_attempts = biz_config.get("max_call_attempts", self.max_call_attempts)
             biz_retry_interval = biz_config.get("retry_interval", self.retry_interval)
-            logger.info(f"Config: {seller_name} (biz={seller_biz_id}) max_attempts={biz_max_attempts}, retry={biz_retry_interval}s")
+
+            # Avval javob bermagan sotuvchi bo'lsa — faqat 1 urinish
+            is_retry = seller_phone in self.state.unanswered_sellers
+            if is_retry:
+                biz_max_attempts = 1
+                logger.info(f"QAYTA qo'ng'iroq (1 urinish): {seller_name} ({seller_phone}, biz={seller_biz_id})")
+            else:
+                logger.info(f"Config: {seller_name} (biz={seller_biz_id}) max_attempts={biz_max_attempts}, retry={biz_retry_interval}s")
 
             logger.info(f"Qo'ng'iroq: {seller_name} ({seller_phone}), {order_count} ta buyurtma, til: {seller_lang}")
 
@@ -1724,13 +1734,13 @@ class AutodialerPro:
             self._seller_call_answered[seller_phone] = result.is_answered
 
             if result.is_answered:
-                # Faqat JAVOB BERGAN sotuvchilarni belgilash
-                # Javob bermaganlar keyingi siklda qayta qo'ng'iroq qilinadi
+                # JAVOB BERDI — buyurtmalarni belgilash, unanswered dan olib tashlash
                 if seller_phone not in self.state.last_communicated_orders:
                     self.state.last_communicated_orders[seller_phone] = []
                 existing_ids = set(self.state.last_communicated_orders[seller_phone])
                 new_ids = [oid for oid in order_ids if oid not in existing_ids]
                 self.state.last_communicated_orders[seller_phone].extend(new_ids)
+                self.state.unanswered_sellers.discard(seller_phone)
                 logger.info(f"[OK] Qo'ng'iroq muvaffaqiyatli: {seller_name} ({seller_phone})")
                 self.stats.record_call(
                     phone=seller_phone,
@@ -1741,7 +1751,9 @@ class AutodialerPro:
                     order_ids=order_ids
                 )
             else:
-                logger.warning(f"[X] Qo'ng'iroq javobsiz: {seller_name} ({seller_phone}) - {result.status}")
+                # JAVOB BERMADI — keyingi siklda 1 urinish bilan qayta qo'ng'iroq
+                self.state.unanswered_sellers.add(seller_phone)
+                logger.warning(f"[X] Qo'ng'iroq javobsiz: {seller_name} ({seller_phone}) - keyingi siklda qayta qo'ng'iroq (1 urinish)")
                 self.stats.record_call(
                     phone=seller_phone,
                     seller_name=seller_name,
