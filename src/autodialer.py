@@ -2075,8 +2075,14 @@ class AutodialerPro:
                     if success:
                         logger.info(f"Sotuvchi xabari yangilandi: {seller_phone} ({msg_id}), buyurtmalar: {len(seller_data['orders'])}, urinishlar: {seller_attempts}")
                     else:
-                        # Edit ishlamadi - yangi xabar yuborish
-                        logger.warning(f"Xabar tahrirlanmadi, yangi yuborilmoqda: {seller_phone}")
+                        # Edit ishlamadi - avval eskisini O'CHIRISH, keyin yangi yuborish
+                        logger.warning(f"Xabar tahrirlanmadi, eskisi o'chirilib yangi yuborilmoqda: {seller_phone}")
+                        try:
+                            await self.telegram.delete_message(msg_id)
+                            if msg_id in self.notification_manager._active_message_ids:
+                                self.notification_manager._active_message_ids.remove(msg_id)
+                        except Exception:
+                            pass
                         new_msg_id = await self.telegram.send_seller_orders_alert(
                             seller_data, seller_attempts, call_note=call_note
                         )
