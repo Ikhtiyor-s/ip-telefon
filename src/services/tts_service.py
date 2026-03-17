@@ -343,7 +343,7 @@ class TTSService:
                 logger.debug(f"TTS yaratildi: {lang}/{i}")
 
         logger.info("TTS oldindan yaratish tugadi")
-        await self.sync_to_wsl()
+        await asyncio.to_thread(self._sync_to_wsl_blocking)
 
     async def _sync_single_file(self, wav_path: Path):
         """Bitta audio faylni Asterisk katalogiga ko'chirish"""
@@ -375,6 +375,57 @@ class TTSService:
                 )
         except Exception as e:
             logger.warning(f"Audio sync xatosi ({wav_path.name}): {e}")
+
+    def _sync_to_wsl_blocking(self):
+        """sync_to_wsl ning sinxron versiyasi (asyncio.to_thread uchun)"""
+        import subprocess
+        import shutil
+
+        cache_dir = self.audio_dir / "cache"
+        if not cache_dir.exists():
+            logger.warning("Cache katalogi topilmadi")
+            return
+
+        default_platform = "wsl" if os.name == "nt" else "linux"
+        platform = os.getenv("PLATFORM", default_platform).lower()
+        default_sounds = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
+        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", default_sounds)
+
+        try:
+            import glob
+            wav_files = glob.glob(str(cache_dir / "*.wav"))
+
+            if not wav_files:
+                logger.warning(f"Hech qanday .wav fayl topilmadi: {cache_dir}")
+                return
+
+            if platform == "linux":
+                os.makedirs(sounds_path, exist_ok=True)
+                for wav_file in wav_files:
+                    dest = os.path.join(sounds_path, os.path.basename(wav_file))
+                    shutil.copy2(wav_file, dest)
+                logger.info(f"Audio fayllar ko'chirildi: {len(wav_files)} ta fayl -> {sounds_path}")
+            else:
+                subprocess.run(
+                    ["wsl", "mkdir", "-p", sounds_path],
+                    capture_output=True, timeout=10
+                )
+                for wav_file in wav_files:
+                    wav_file_wsl = str(wav_file).replace("\\", "/")
+                    if len(wav_file_wsl) > 1 and wav_file_wsl[1] == ":":
+                        wav_file_wsl = f"/mnt/{wav_file_wsl[0].lower()}{wav_file_wsl[2:]}"
+                    result = subprocess.run(
+                        ["wsl", "cp", wav_file_wsl, f"{sounds_path}/"],
+                        capture_output=True, timeout=10
+                    )
+                    if result.returncode != 0:
+                        logger.warning(f"Fayl ko'chirishda xato {wav_file}: {result.stderr.decode()}")
+                logger.info(f"Audio fayllar WSL ga ko'chirildi: {len(wav_files)} ta fayl")
+
+        except subprocess.TimeoutExpired:
+            logger.error("WSL buyrug'i timeout")
+        except Exception as e:
+            logger.error(f"Audio sync xatosi: {e}")
 
     async def sync_to_wsl(self):
         """

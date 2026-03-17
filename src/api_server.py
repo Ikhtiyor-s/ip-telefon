@@ -64,6 +64,7 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/orders", self.get_orders)
         r.add_get("/api/autodialer/daily-trend", self.get_daily_trend)
         r.add_get("/api/autodialer/order-statuses", self.get_order_statuses)
+        r.add_get("/api/autodialer/live-orders", self.get_live_orders)
         # Businesses
         r.add_get("/api/autodialer/businesses", self.get_businesses)
         r.add_post("/api/autodialer/businesses/{biz_id}/toggle-call", self.toggle_call)
@@ -236,6 +237,115 @@ class AutodialerAPI:
             if os_val:
                 order_statuses[os_val] = order_statuses.get(os_val, 0) + 1
         return self._ok({"results": results, "order_statuses": order_statuses})
+
+    async def get_live_orders(self, request):
+        """Nonbor API dan real-time buyurtmalar (alohida HTTP session — polling buzilmaydi)"""
+        if not self.autodialer or not self.autodialer.nonbor:
+            return self._ok({"orders": [], "total": 0, "status_counts": {}})
+
+        nonbor = self.autodialer.nonbor
+        base_url = nonbor.base_url
+        headers = dict(nonbor.headers)
+        timeout = aiohttp.ClientTimeout(total=10)
+
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                # 1. Bizneslarni olish
+                async with session.get(f"{base_url}/telegram_bot/businesses/accepted/", timeout=timeout) as resp:
+                    if resp.status != 200:
+                        return self._ok({"orders": [], "total": 0, "status_counts": {}})
+                    biz_data = await resp.json()
+                    businesses = biz_data.get("result", [])
+
+                if not businesses:
+                    return self._ok({"orders": [], "total": 0, "status_counts": {}})
+
+                # 2. Har bir biznes uchun seller_id + buyurtmalar (parallel)
+                async def fetch_biz_orders(biz):
+                    biz_phone = biz.get("phone_number", "")
+                    if not biz_phone:
+                        return []
+                    username = biz_phone.lstrip("+")
+
+                    # Seller ID olish (cache yoki API)
+                    seller_id = nonbor._seller_id_cache.get(f"+{username}")
+                    if not seller_id:
+                        try:
+                            async with session.post(
+                                f"{base_url}/telegram_bot/get_seller_info/",
+                                json={"username": username}, timeout=timeout
+                            ) as r:
+                                if r.status == 200:
+                                    d = await r.json()
+                                    results = d.get("result", [])
+                                    if results:
+                                        seller_id = results[0].get("id")
+                                        if seller_id:
+                                            nonbor._seller_id_cache[f"+{username}"] = seller_id
+                        except Exception:
+                            return []
+                    if not seller_id:
+                        return []
+
+                    # Buyurtmalarni olish
+                    try:
+                        async with session.get(
+                            f"{base_url}/telegram_bot/sellers/{seller_id}/orders/",
+                            timeout=timeout
+                        ) as r:
+                            if r.status != 200:
+                                return []
+                            d = await r.json()
+                            raw_orders = d.get("result", [])
+                    except Exception:
+                        return []
+
+                    result = []
+                    for o in raw_orders:
+                        user = o.get("user") or {}
+                        result.append({
+                            "id": o.get("id"),
+                            "state": o.get("state", ""),
+                            "seller_name": biz.get("title", ""),
+                            "seller_phone": biz_phone,
+                            "client_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
+                            "client_phone": user.get("phone", ""),
+                            "product_name": "",
+                            "total_price": 0,
+                            "delivery_method": "",
+                            "payment_method": "",
+                            "created_at": o.get("created_at", ""),
+                            "updated_at": "",
+                            "paid": False,
+                        })
+                    return result
+
+                import asyncio as _asyncio
+                all_results = await _asyncio.gather(
+                    *[fetch_biz_orders(biz) for biz in businesses],
+                    return_exceptions=True
+                )
+        except Exception as e:
+            logger.error(f"live-orders xato: {e}")
+            return self._ok({"orders": [], "total": 0, "status_counts": {}})
+
+        orders = []
+        for r in all_results:
+            if isinstance(r, list):
+                orders.extend(r)
+
+        orders.sort(key=lambda x: x.get("id", 0), reverse=True)
+
+        status_counts = {}
+        for o in orders:
+            s = o["state"]
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        return self._ok({
+            "orders": orders,
+            "total": len(orders),
+            "status_counts": status_counts,
+        })
 
     # ===== BUSINESSES =====
 
@@ -570,8 +680,8 @@ class AutodialerAPI:
         action = request.match_info["action"]
 
         if action == "restart":
-            # Systemd orqali restart (faqat Linux da)
             if os.name != "nt":
+                # Systemd orqali restart (faqat Linux da)
                 try:
                     result = subprocess.run(
                         ["sudo", "systemctl", "restart", "autodialer"],
@@ -583,7 +693,21 @@ class AutodialerAPI:
                 except Exception as e:
                     return self._err(f"Restart xatosi: {e}")
             else:
-                return self._err("Windows da systemctl ishlamaydi")
+                # Windows da stop + start
+                if self.autodialer:
+                    await self.autodialer.stop()
+                    await asyncio.sleep(1)
+                    asyncio.create_task(self.autodialer.start())
+                    return self._json({"success": True, "message": "Servis qayta ishga tushirilmoqda..."})
+                return self._err("Autodialer obyekti topilmadi")
+
+        elif action == "start":
+            if self.autodialer and self.autodialer._running:
+                return self._json({"success": True, "message": "Servis allaqachon ishlayapti"})
+            if self.autodialer:
+                asyncio.create_task(self.autodialer.start())
+                return self._json({"success": True, "message": "Servis ishga tushirilmoqda..."})
+            return self._err("Autodialer obyekti topilmadi")
 
         elif action == "stop":
             if self.autodialer:
