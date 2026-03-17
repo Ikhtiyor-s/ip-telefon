@@ -204,7 +204,7 @@ class AutodialerPro:
         # Vaqtlar
         wait_before_call: int = 90,  # 1.5 daqiqa
         telegram_alert_time: int = 180,  # 3 daqiqa
-        max_call_attempts: int = 2,
+        max_call_attempts: int = 3,
         retry_interval: int = 30,  # 30 soniya (birinchi qo'ng'iroqdan keyin)
         planned_reminder_time: int = 60,  # Reja buyurtma eslatma vaqti (daqiqa)
         # Yo'llar
@@ -1690,11 +1690,18 @@ class AutodialerPro:
                     return (False, None)
 
                 # Eski buyurtmalar hali CHECKING da ekanini tekshirish
+                # Agar hech bo'lmasa BITTA buyurtma hali CHECKING bo'lsa — davom etamiz
+                still_checking = 0
                 for order_id in order_ids:
                     status = await self.nonbor.get_order_status(order_id)
-                    if status and status != "CHECKING":
+                    if status and status == "CHECKING":
+                        still_checking += 1
+                    elif status and status != "CHECKING":
                         logger.info(f"Buyurtma #{order_id} statusi o'zgardi: {status}")
-                        return (False, None)
+                if still_checking == 0:
+                    logger.info(f"Barcha eski buyurtmalar qabul qilindi, qo'ng'iroq to'xtatildi")
+                    return (False, None)
+                logger.info(f"{still_checking}/{len(order_ids)} ta buyurtma hali CHECKING da — qayta qo'ng'iroq qilinadi")
 
                 # Yangi TTS audio yaratish (yangilangan son bilan, xuddi shu til bilan)
                 new_audio_path = await self.tts.generate_order_message(new_count, lang=seller_lang)
@@ -2138,7 +2145,7 @@ async def main():
         # Vaqtlar
         wait_before_call=int(os.getenv("WAIT_BEFORE_CALL", "90")),
         telegram_alert_time=int(os.getenv("TELEGRAM_ALERT_TIME", "180")),
-        max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
+        max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "3")),
         retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
         planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
 
