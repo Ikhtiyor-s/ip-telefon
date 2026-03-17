@@ -821,7 +821,8 @@ class TelegramNotificationManager:
     async def notify_seller_orders(
         self,
         seller_orders: dict,
-        call_attempts: int = 0
+        call_attempts: int = 0,
+        chat_id: str = None
     ):
         """
         Sotuvchi buyurtmalari haqida xabar
@@ -829,9 +830,10 @@ class TelegramNotificationManager:
         Args:
             seller_orders: Sotuvchi va uning buyurtmalari
             call_attempts: Qo'ng'iroq urinishlari
+            chat_id: Biznes guruh chat ID (None bo'lsa default)
         """
-        # Yangi xabar yuborish
-        message_id = await self.telegram.send_seller_orders_alert(seller_orders, call_attempts)
+        # Yangi xabar yuborish - biznes guruhiga
+        message_id = await self.telegram.send_seller_orders_alert(seller_orders, call_attempts, chat_id=chat_id)
         if message_id:
             self._active_message_ids.append(message_id)
             self._message_sent_at = datetime.now()

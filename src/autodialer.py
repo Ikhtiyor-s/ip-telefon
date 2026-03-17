@@ -1866,19 +1866,30 @@ class AutodialerPro:
                     "seller_name": order.get("seller_name", "Noma'lum"),
                     "seller_phone": seller_phone,
                     "seller_address": order.get("seller_address", "Noma'lum"),
-                    "orders": []
+                    "orders": [],
+                    "chat_id": None,
                 }
             sellers[seller_phone]["orders"].append(order)
+
+            # Biznes guruh chat_id ni aniqlash
+            if not sellers[seller_phone]["chat_id"]:
+                order_id = order.get("lead_id") or order.get("order_number")
+                if order_id and order_id in self._group_order_messages:
+                    biz_id = self._group_order_messages[order_id].get("biz_id")
+                    if biz_id and biz_id in self.stats_handler._business_groups:
+                        sellers[seller_phone]["chat_id"] = self.stats_handler._business_groups[biz_id]
 
         # Har bir sotuvchi uchun bitta xabar
         for seller_phone, seller_data in sellers.items():
             try:
                 # Har bir sotuvchi uchun o'z qo'ng'iroq urinishlari soni
                 seller_attempts = self._seller_call_attempts.get(seller_phone, 0)
-                logger.info(f"Sotuvchi {seller_data['seller_name']}: {len(seller_data['orders'])} ta buyurtma, {seller_attempts} urinish")
+                biz_chat_id = seller_data.get("chat_id")
+                logger.info(f"Sotuvchi {seller_data['seller_name']}: {len(seller_data['orders'])} ta buyurtma, {seller_attempts} urinish, chat={biz_chat_id}")
                 await self.notification_manager.notify_seller_orders(
                     seller_data,
-                    seller_attempts
+                    seller_attempts,
+                    chat_id=biz_chat_id
                 )
             except Exception as e:
                 logger.error(f"Sotuvchi {seller_phone} xabar yuborishda xato: {e}")
@@ -2029,9 +2040,18 @@ class AutodialerPro:
                     "seller_name": order.get("seller_name", "Noma'lum"),
                     "seller_phone": seller_phone,
                     "seller_address": order.get("seller_address", "Noma'lum"),
-                    "orders": []
+                    "orders": [],
+                    "chat_id": None,  # Biznes guruh chat_id
                 }
             sellers[seller_phone]["orders"].append(order)
+
+            # Biznes guruh chat_id ni aniqlash (buyurtma order_id orqali)
+            if not sellers[seller_phone]["chat_id"]:
+                order_id = order.get("lead_id") or order.get("order_number")
+                if order_id and order_id in self._group_order_messages:
+                    biz_id = self._group_order_messages[order_id].get("biz_id")
+                    if biz_id and biz_id in self.stats_handler._business_groups:
+                        sellers[seller_phone]["chat_id"] = self.stats_handler._business_groups[biz_id]
 
         # MUHIM: Mavjud xabarlarni yangilash yoki yangi yuborish
         if not hasattr(self.notification_manager, '_combined_message_id'):
@@ -2067,6 +2087,9 @@ class AutodialerPro:
                 # Har bir sotuvchi uchun o'z qo'ng'iroq urinishlari soni
                 seller_attempts = self._seller_call_attempts.get(seller_phone, 0)
 
+                # Biznes guruh chat_id (None bo'lsa default admin guruhga ketadi)
+                biz_chat_id = seller_data.get("chat_id")
+
                 # Qo'ng'iroq holati izohi
                 if seller_phone == "Noma'lum" or seller_phone not in self._seller_call_attempts:
                     call_note = "📵 Telefon raqami topilmadi"
@@ -2082,21 +2105,22 @@ class AutodialerPro:
                         message_id=msg_id,
                         seller_orders=seller_data,
                         call_attempts=seller_attempts,
+                        chat_id=biz_chat_id,
                         call_note=call_note
                     )
                     if success:
-                        logger.info(f"Sotuvchi xabari yangilandi: {seller_phone} ({msg_id}), buyurtmalar: {len(seller_data['orders'])}, urinishlar: {seller_attempts}")
+                        logger.info(f"Sotuvchi xabari yangilandi: {seller_phone} ({msg_id}), chat={biz_chat_id}, buyurtmalar: {len(seller_data['orders'])}, urinishlar: {seller_attempts}")
                     else:
                         # Edit ishlamadi - avval eskisini O'CHIRISH, keyin yangi yuborish
                         logger.warning(f"Xabar tahrirlanmadi, eskisi o'chirilib yangi yuborilmoqda: {seller_phone}")
                         try:
-                            await self.telegram.delete_message(msg_id)
+                            await self.telegram.delete_message(msg_id, chat_id=biz_chat_id)
                             if msg_id in self.notification_manager._active_message_ids:
                                 self.notification_manager._active_message_ids.remove(msg_id)
                         except Exception:
                             pass
                         new_msg_id = await self.telegram.send_seller_orders_alert(
-                            seller_data, seller_attempts, call_note=call_note
+                            seller_data, seller_attempts, chat_id=biz_chat_id, call_note=call_note
                         )
                         if new_msg_id:
                             self.notification_manager._seller_message_ids[seller_phone] = new_msg_id
@@ -2105,13 +2129,13 @@ class AutodialerPro:
                 else:
                     # YANGI sotuvchi - yangi xabar yuborish
                     new_msg_id = await self.telegram.send_seller_orders_alert(
-                        seller_data, seller_attempts, call_note=call_note
+                        seller_data, seller_attempts, chat_id=biz_chat_id, call_note=call_note
                     )
                     if new_msg_id:
                         self.notification_manager._seller_message_ids[seller_phone] = new_msg_id
                         if new_msg_id not in self.notification_manager._active_message_ids:
                             self.notification_manager._active_message_ids.append(new_msg_id)
-                        logger.info(f"Yangi sotuvchi xabari: {seller_phone} ({new_msg_id}), urinishlar: {seller_attempts}")
+                        logger.info(f"Yangi sotuvchi xabari: {seller_phone} ({new_msg_id}), chat={biz_chat_id}, urinishlar: {seller_attempts}")
 
             # Combined message ID yangilash (birinchi sotuvchi xabari)
             if self.notification_manager._seller_message_ids:
