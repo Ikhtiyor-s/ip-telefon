@@ -23,7 +23,7 @@ services:
       - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.local.conf:/etc/asterisk/manager.conf:ro
-      - autodialer-audio:/var/lib/asterisk/sounds/autodialer
+      - autodialer-audio:/tmp/autodialer-audio
       - asterisk-logs:/var/log/asterisk
     environment:
       - TZ=Asia/Tashkent

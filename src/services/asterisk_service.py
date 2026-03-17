@@ -413,10 +413,12 @@ class AsteriskAMI:
         # Audio faylni Asterisk sounds pathga convert qilish
         # Windows pathdan faqat fayl nomini olish
         import os
-        default_sounds = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
-        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", default_sounds)
+        # ASTERISK_PLAYBACK_PATH: Asterisk konteyner ichidagi audio yo'l
+        # ASTERISK_SOUNDS_PATH: Autodialer konteyner ichidagi audio yo'l (fayllar yoziladigan)
+        default_playback = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
+        playback_path = os.getenv("ASTERISK_PLAYBACK_PATH", os.getenv("ASTERISK_SOUNDS_PATH", default_playback))
         audio_filename = Path(str(audio_file)).stem  # extension siz fayl nomi
-        wsl_audio_path = f"{sounds_path}/{audio_filename}"
+        wsl_audio_path = f"{playback_path}/{audio_filename}"
 
         # Channel variable
         channel_vars = f"AUDIO_FILE={wsl_audio_path}"

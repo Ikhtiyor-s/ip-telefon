@@ -767,6 +767,12 @@ class AutodialerPro:
         """Holatni tekshirish va qayta ishlash"""
         now = datetime.now()
 
+        # Biznes guruhlarni majburiy to'ldirish (fayl o'chirilgan bo'lsa)
+        if self.stats_handler and hasattr(self.stats_handler, '_business_groups'):
+            if "24" not in self.stats_handler._business_groups:
+                self.stats_handler._business_groups["24"] = os.environ.get("TELEGRAM_CHAT_ID", "-5219407458")
+                self.stats_handler._save_groups()
+
         # 90s TIMER: Qo'ng'iroq qilish
         if self.state.waiting_for_call and self.state.last_new_order_time:
             elapsed = (now - self.state.last_new_order_time).total_seconds()
@@ -1702,13 +1708,19 @@ class AutodialerPro:
                 # Eski buyurtmalar hali CHECKING da ekanini tekshirish
                 # Agar hech bo'lmasa BITTA buyurtma hali CHECKING bo'lsa — davom etamiz
                 still_checking = 0
+                confirmed_accepted = 0
                 for order_id in order_ids:
                     status = await self.nonbor.get_order_status(order_id)
-                    if status and status == "CHECKING":
+                    if status is None:
+                        # API xato/noma'lum → CHECKING deb hisoblaymiz (fail-safe)
                         still_checking += 1
-                    elif status and status != "CHECKING":
+                        logger.info(f"Buyurtma #{order_id}: status noma'lum (API xato), CHECKING deb hisoblanadi")
+                    elif status == "CHECKING":
+                        still_checking += 1
+                    else:
+                        confirmed_accepted += 1
                         logger.info(f"Buyurtma #{order_id} statusi o'zgardi: {status}")
-                if still_checking == 0:
+                if still_checking == 0 and confirmed_accepted > 0:
                     logger.info(f"Barcha eski buyurtmalar qabul qilindi, qo'ng'iroq to'xtatildi")
                     return (False, None)
                 logger.info(f"{still_checking}/{len(order_ids)} ta buyurtma hali CHECKING da — qayta qo'ng'iroq qilinadi")
