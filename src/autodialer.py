@@ -204,7 +204,7 @@ class AutodialerPro:
         # Vaqtlar
         wait_before_call: int = 90,  # 1.5 daqiqa
         telegram_alert_time: int = 180,  # 3 daqiqa
-        max_call_attempts: int = 3,
+        max_call_attempts: int = 2,
         retry_interval: int = 30,  # 30 soniya (birinchi qo'ng'iroqdan keyin)
         planned_reminder_time: int = 60,  # Reja buyurtma eslatma vaqti (daqiqa)
         # Yo'llar
@@ -1719,18 +1719,18 @@ class AutodialerPro:
                 retry_interval_override=biz_retry_interval,
             )
 
-            # Buyurtmalarni belgilash
-            if seller_phone not in self.state.last_communicated_orders:
-                self.state.last_communicated_orders[seller_phone] = []
-            existing_ids = set(self.state.last_communicated_orders[seller_phone])
-            new_ids = [oid for oid in order_ids if oid not in existing_ids]
-            self.state.last_communicated_orders[seller_phone].extend(new_ids)
-
             # Statistika
             self._seller_call_attempts[seller_phone] = self.state.call_attempts
             self._seller_call_answered[seller_phone] = result.is_answered
 
             if result.is_answered:
+                # Faqat JAVOB BERGAN sotuvchilarni belgilash
+                # Javob bermaganlar keyingi siklda qayta qo'ng'iroq qilinadi
+                if seller_phone not in self.state.last_communicated_orders:
+                    self.state.last_communicated_orders[seller_phone] = []
+                existing_ids = set(self.state.last_communicated_orders[seller_phone])
+                new_ids = [oid for oid in order_ids if oid not in existing_ids]
+                self.state.last_communicated_orders[seller_phone].extend(new_ids)
                 logger.info(f"[OK] Qo'ng'iroq muvaffaqiyatli: {seller_name} ({seller_phone})")
                 self.stats.record_call(
                     phone=seller_phone,
@@ -1803,11 +1803,12 @@ class AutodialerPro:
             # State ni tozalash (lekin last_communicated_orders saqlanadi)
             self.state.reset()
         else:
-            # Javob berilmadi - QAYTA QO'NG'IROQ QILINMAYDI
-            # Faqat 2 marta qo'ng'iroq qilinadi, keyin to'xtaydi
+            # Javob berilmadi — keyingi polling siklida qayta qo'ng'iroq qilinadi
+            # last_communicated_orders da faqat javob berganlar bor,
+            # javob bermaganlar keyingi siklda yangi buyurtmalar bilan birga jamlanadi
             logger.warning(f"{failed_count} ta qo'ng'iroqqa javob berilmadi, {uncommunicated_count} ta buyurtma uchun")
-            logger.info("Qayta qo'ng'iroq qilinmaydi - 180s timer davom etmoqda (Telegram uchun)")
-            # State ni tozalash
+            logger.info("Javob bermaganlar keyingi polling siklida qayta qo'ng'iroq qilinadi")
+            # State ni tozalash (lekin last_communicated_orders SAQLANADI)
             self.state.reset()
 
     async def _on_call_attempt(self, attempt: int, max_attempts: int):
@@ -2145,7 +2146,7 @@ async def main():
         # Vaqtlar
         wait_before_call=int(os.getenv("WAIT_BEFORE_CALL", "90")),
         telegram_alert_time=int(os.getenv("TELEGRAM_ALERT_TIME", "180")),
-        max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "3")),
+        max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
         retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
         planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
 
