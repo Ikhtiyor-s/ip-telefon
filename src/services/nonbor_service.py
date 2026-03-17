@@ -12,10 +12,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-NONBOR_BASE_URL = os.getenv("NONBOR_BASE_URL", "http://192.168.127.28:10000")
+NONBOR_BASE_URL = os.getenv("NONBOR_BASE_URL", "https://prod.nonbor.uz/api/v2")
 NONBOR_SECRET = os.getenv("NONBOR_SECRET", "nonbor-secret-key")
 # Domain ni base_url dan olish (orders endpoint uchun)
-NONBOR_DOMAIN = NONBOR_BASE_URL.split("/api/")[0]  # http://192.168.127.28:10010
+NONBOR_DOMAIN = NONBOR_BASE_URL.split("/api/")[0]  # https://prod.nonbor.uz
 
 
 class NonborService:
@@ -62,8 +62,22 @@ class NonborService:
         if self._session and not self._session.closed:
             await self._session.close()
 
+    async def _recreate_session(self):
+        """Session ni yopib qayta yaratish (stale connection fix)"""
+        if self._session and not self._session.closed:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+        self._session = None
+        logger.info("HTTP session qayta yaratildi (stale connection fix)")
+
     async def _make_request(self, method: str, endpoint: str) -> Optional[dict]:
         """API so'rov yuborish"""
+        # 10 ta ketma-ket xatodan keyin session ni qayta yaratish
+        if self._consecutive_errors > 0 and self._consecutive_errors % 10 == 0:
+            await self._recreate_session()
+
         session = await self._get_session()
         url = f"{self.base_url}/{endpoint}"
         timeout = aiohttp.ClientTimeout(total=15)
@@ -219,13 +233,15 @@ class NonborService:
         if orders is None:
             return None
 
-        # CHECKING statusdagi buyurtmalarni filter qilish
+        # get-order-for-courier/ faqat qabul kutayotgan buyurtmalarni qaytaradi
+        # CHECKING yoki PENDING — ikkalasi ham yangi buyurtma (API format o'zgarishi)
+        target_statuses = {self.status_name.upper(), "CHECKING", "PENDING"}
         checking_orders = [
             order for order in orders
-            if order.get("state", "").upper() == self.status_name.upper()
+            if order.get("state", "").upper() in target_statuses
         ]
 
-        logger.debug(f"CHECKING buyurtmalar: {len(checking_orders)} ta (jami: {len(orders)})")
+        logger.debug(f"Yangi buyurtmalar: {len(checking_orders)} ta (jami: {len(orders)})")
         return checking_orders
 
     async def check_for_new_leads(self) -> tuple:
@@ -323,21 +339,34 @@ class NonborService:
             # Biznes telefon raqami va tilini olish (businesses API dan, title bo'yicha)
             biz_title = business.get("title", "")
             if biz_title:
-                for cached_biz in self._businesses_cache.values():
-                    if cached_biz.get("title", "").strip().lower() == biz_title.strip().lower():
-                        phone = cached_biz.get("phone_number", "")
-                        if phone:
-                            result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
-                        # Biznes egasi tili (ilovada tanlangan)
-                        lang = (
-                            cached_biz.get("language") or
-                            cached_biz.get("owner_language") or
-                            cached_biz.get("tg_language") or
-                            cached_biz.get("language_code") or
-                            "uz"
-                        )
-                        result["seller_language"] = str(lang).lower()[:2]
+                # Avval cacheda izlash, topilmasa cacheni yangilab qayta izlash
+                matched_biz = None
+                for attempt in range(2):
+                    for cached_biz in self._businesses_cache.values():
+                        if cached_biz.get("title", "").strip().lower() == biz_title.strip().lower():
+                            matched_biz = cached_biz
+                            break
+                    if matched_biz:
                         break
+                    if attempt == 0:
+                        logger.info(f"Biznes '{biz_title}' cacheda topilmadi, cacheni yangilash...")
+                        await self.get_businesses()
+
+                if matched_biz:
+                    phone = matched_biz.get("phone_number", "")
+                    if phone:
+                        result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
+                    # Biznes egasi tili (ilovada tanlangan)
+                    lang = (
+                        matched_biz.get("language") or
+                        matched_biz.get("owner_language") or
+                        matched_biz.get("tg_language") or
+                        matched_biz.get("language_code") or
+                        "uz"
+                    )
+                    result["seller_language"] = str(lang).lower()[:2]
+                else:
+                    logger.warning(f"Biznes '{biz_title}' businesses API da topilmadi (cache: {len(self._businesses_cache)} ta)")
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}
@@ -547,9 +576,14 @@ class NonborPoller:
 
     async def _poll_loop(self):
         """Asosiy polling sikli - exponential backoff bilan"""
+        self._poll_count = 0
         while self._running:
             try:
+                self._poll_count += 1
                 count, current_ids = await self.nonbor.check_for_new_leads()
+                # Har 12 poll da (60s) holat log
+                if self._poll_count % 12 == 1:
+                    logger.info(f"Polling #{self._poll_count}: buyurtmalar={count}, ids={current_ids}")
 
                 if count is None:
                     # Xatolik — backoff hisoblash (5s, 10s, 20s, 40s, 60s max)
