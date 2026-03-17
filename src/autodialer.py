@@ -240,6 +240,9 @@ class AutodialerPro:
         # Guruh xabarlari - order_id -> {msg_id, biz_id, chat_id}
         self._group_order_messages: Dict[int, dict] = {}
 
+        # Buyurtma ma'lumotlari keshi - yangi kelganda darhol olish
+        self._order_data_cache: Dict[int, dict] = {}
+
         # Lock - guruh xabarlarini yangilashda race condition oldini olish uchun
         self._group_messages_lock = asyncio.Lock()
 
@@ -1266,6 +1269,21 @@ class AutodialerPro:
                     self.state.order_timestamps[new_id] = now
                     logger.debug(f"Buyurtma #{new_id} uchun timestamp qo'yildi: {now}")
 
+            # MUHIM: Yangi buyurtmalar ma'lumotlarini DARHOL keshga olish
+            # Resolved bo'lganda API dan topilmasligi mumkin, shuning uchun hozir olib qo'yamiz
+            for new_id in truly_new_ids:
+                if new_id not in self._order_data_cache:
+                    try:
+                        order_data = await self.nonbor.get_order_full_data(new_id)
+                        if order_data and order_data.get("seller_name") != "Noma'lum":
+                            self._order_data_cache[new_id] = order_data
+                            logger.info(f"Buyurtma #{new_id} keshga olindi: {order_data.get('seller_name')} / {order_data.get('product_name')}")
+                        else:
+                            self._order_data_cache[new_id] = order_data or {}
+                            logger.debug(f"Buyurtma #{new_id} keshga olindi (to'liq emas)")
+                    except Exception as e:
+                        logger.warning(f"Buyurtma #{new_id} keshga olishda xato: {e}")
+
         # Agar yangi buyurtma qo'shilgan bo'lsa
         if len(truly_new_ids) > 0:
             if old_count > 0:
@@ -1361,14 +1379,19 @@ class AutodialerPro:
                 continue
 
             try:
-                # MUHIM: Avval keshdan olish (guruh xabarlaridan)
+                # MUHIM: Avval order_data_cache dan olish (yangi kelganda olingan)
                 order_data = None
-                if order_id in self._group_order_messages:
+                if order_id in self._order_data_cache:
+                    order_data = self._order_data_cache[order_id]
+                    logger.debug(f"Buyurtma #{order_id} order_data_cache dan olindi")
+
+                # Keyin guruh xabarlaridan olish
+                if not order_data and order_id in self._group_order_messages:
                     cached = self._group_order_messages[order_id]
                     cached_data = cached.get("order_data", {})
                     if cached_data:
                         order_data = cached_data
-                        logger.debug(f"Buyurtma #{order_id} keshdan olindi")
+                        logger.debug(f"Buyurtma #{order_id} guruh keshdan olindi")
 
                 # Keshda yo'q bo'lsa yoki ma'lumotlar to'liq emas ("Noma'lum") - API dan olish
                 has_unknown = (

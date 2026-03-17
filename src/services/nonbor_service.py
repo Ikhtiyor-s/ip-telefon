@@ -370,11 +370,54 @@ class NonborService:
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}
+        delivery = order.get("delivery") or {}
         if user:
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             result["client_name"] = f"{first_name} {last_name}".strip() or "Noma'lum"
-            result["client_phone"] = user.get("phone", "Noma'lum")
+            result["seller_language"] = (user.get("lang") or result.get("seller_language") or "uz").lower()[:2]
+
+        # Mijoz telefon raqami - bir nechta joydan qidirish
+        client_phone = (
+            user.get("phone") or
+            user.get("phone_number") or
+            delivery.get("phone") or
+            delivery.get("phone_number") or
+            delivery.get("recipient_phone") or
+            order.get("phone") or
+            order.get("client_phone") or
+            ""
+        )
+
+        # Agar topilmasa - /orders/{id}/ endpointdan olish
+        if not client_phone:
+            try:
+                details = await self.get_order_details(order_id)
+                if details:
+                    detail_result = details.get("result", details)
+                    detail_user = detail_result.get("user") or {}
+                    detail_delivery = detail_result.get("delivery") or {}
+                    client_phone = (
+                        detail_user.get("phone") or
+                        detail_user.get("phone_number") or
+                        detail_delivery.get("phone") or
+                        detail_delivery.get("phone_number") or
+                        detail_result.get("phone") or
+                        detail_result.get("client_phone") or
+                        ""
+                    )
+                    if client_phone:
+                        logger.info(f"Buyurtma #{order_id}: telefon /orders/ dan olindi: {client_phone}")
+                    else:
+                        logger.info(f"Buyurtma #{order_id}: /orders/ da ham telefon yo'q. Keys: {list(detail_result.keys())}")
+            except Exception as e:
+                logger.debug(f"Buyurtma #{order_id}: /orders/ endpoint xato: {e}")
+
+        # None/null/bo'sh tekshirish
+        if client_phone and str(client_phone).strip() not in ("None", "null", ""):
+            result["client_phone"] = str(client_phone).strip()
+        else:
+            result["client_phone"] = "Noma'lum"
 
         # Mahsulotlar
         items = order.get("order_item") or order.get("items") or []
