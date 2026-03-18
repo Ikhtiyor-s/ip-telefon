@@ -1884,12 +1884,12 @@ class AutodialerPro:
             try:
                 # Har bir sotuvchi uchun o'z qo'ng'iroq urinishlari soni
                 seller_attempts = self._seller_call_attempts.get(seller_phone, 0)
-                biz_chat_id = seller_data.get("chat_id")
-                logger.info(f"Sotuvchi {seller_data['seller_name']}: {len(seller_data['orders'])} ta buyurtma, {seller_attempts} urinish, chat={biz_chat_id}")
+                # Alert xabari ADMIN guruhga yuboriladi (default chat_id)
+                logger.info(f"Sotuvchi {seller_data['seller_name']}: {len(seller_data['orders'])} ta buyurtma, {seller_attempts} urinish, chat=ADMIN")
                 await self.notification_manager.notify_seller_orders(
                     seller_data,
                     seller_attempts,
-                    chat_id=biz_chat_id
+                    chat_id=None  # Admin guruhga
                 )
             except Exception as e:
                 logger.error(f"Sotuvchi {seller_phone} xabar yuborishda xato: {e}")
@@ -2087,8 +2087,8 @@ class AutodialerPro:
                 # Har bir sotuvchi uchun o'z qo'ng'iroq urinishlari soni
                 seller_attempts = self._seller_call_attempts.get(seller_phone, 0)
 
-                # Biznes guruh chat_id (None bo'lsa default admin guruhga ketadi)
-                biz_chat_id = seller_data.get("chat_id")
+                # Alert xabari ADMIN guruhga yuboriladi (default chat_id)
+                biz_chat_id = None  # Admin guruhga
 
                 # Qo'ng'iroq holati izohi
                 if seller_phone == "Noma'lum" or seller_phone not in self._seller_call_attempts:
