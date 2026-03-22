@@ -768,10 +768,10 @@ class AutodialerPro:
         now = datetime.now()
 
         # Biznes guruhlarni majburiy to'ldirish (fayl o'chirilgan bo'lsa)
+        # MUHIM: business_groups.json dan o'qiladi, default admin guruhga yozilMAYDI
         if self.stats_handler and hasattr(self.stats_handler, '_business_groups'):
-            if "24" not in self.stats_handler._business_groups:
-                self.stats_handler._business_groups["24"] = os.environ.get("TELEGRAM_CHAT_ID", "-5219407458")
-                self.stats_handler._save_groups()
+            if not self.stats_handler._business_groups:
+                logger.warning("business_groups.json bo'sh - Nonbor admin paneldan guruh biriktiring")
 
         # 90s TIMER: Qo'ng'iroq qilish
         if self.state.waiting_for_call and self.state.last_new_order_time:

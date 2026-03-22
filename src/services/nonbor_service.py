@@ -234,8 +234,7 @@ class NonborService:
             return None
 
         # get-order-for-courier/ faqat qabul kutayotgan buyurtmalarni qaytaradi
-        # CHECKING yoki PENDING — ikkalasi ham yangi buyurtma (API format o'zgarishi)
-        target_statuses = {self.status_name.upper(), "CHECKING", "PENDING"}
+        target_statuses = {self.status_name.upper(), "CHECKING"}
         checking_orders = [
             order for order in orders
             if order.get("state", "").upper() in target_statuses
