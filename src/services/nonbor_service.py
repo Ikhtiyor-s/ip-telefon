@@ -335,21 +335,15 @@ class NonborService:
             result["seller_name"] = business.get("title", "Noma'lum")
             result["seller_address"] = business.get("address", "Noma'lum")
 
-            # Biznes telefon raqami va tilini olish (businesses API dan, title bo'yicha)
-            biz_title = business.get("title", "")
-            if biz_title:
+            # Biznes telefon raqami va tilini olish (businesses API dan, ID bo'yicha)
+            biz_id = business.get("id")
+            if biz_id:
                 # Avval cacheda izlash, topilmasa cacheni yangilab qayta izlash
-                matched_biz = None
-                for attempt in range(2):
-                    for cached_biz in self._businesses_cache.values():
-                        if cached_biz.get("title", "").strip().lower() == biz_title.strip().lower():
-                            matched_biz = cached_biz
-                            break
-                    if matched_biz:
-                        break
-                    if attempt == 0:
-                        logger.info(f"Biznes '{biz_title}' cacheda topilmadi, cacheni yangilash...")
-                        await self.get_businesses()
+                matched_biz = self._businesses_cache.get(biz_id)
+                if not matched_biz:
+                    logger.info(f"Biznes #{biz_id} cacheda topilmadi, cacheni yangilash...")
+                    await self.get_businesses()
+                    matched_biz = self._businesses_cache.get(biz_id)
 
                 if matched_biz:
                     phone = matched_biz.get("phone_number", "")
@@ -365,7 +359,7 @@ class NonborService:
                     )
                     result["seller_language"] = str(lang).lower()[:2]
                 else:
-                    logger.warning(f"Biznes '{biz_title}' businesses API da topilmadi (cache: {len(self._businesses_cache)} ta)")
+                    logger.warning(f"Biznes #{biz_id} ('{business.get('title')}') businesses API da topilmadi (cache: {len(self._businesses_cache)} ta)")
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}

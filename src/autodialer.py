@@ -1662,11 +1662,9 @@ class AutodialerPro:
             biz_max_attempts = biz_config.get("max_call_attempts", self.max_call_attempts)
             biz_retry_interval = biz_config.get("retry_interval", self.retry_interval)
 
-            # Avval javob bermagan sotuvchi bo'lsa — faqat 1 urinish
             is_retry = seller_phone in self.state.unanswered_sellers
             if is_retry:
-                biz_max_attempts = 1
-                logger.info(f"QAYTA qo'ng'iroq (1 urinish): {seller_name} ({seller_phone}, biz={seller_biz_id})")
+                logger.info(f"QAYTA qo'ng'iroq ({biz_max_attempts} urinish): {seller_name} ({seller_phone}, biz={seller_biz_id})")
             else:
                 logger.info(f"Config: {seller_name} (biz={seller_biz_id}) max_attempts={biz_max_attempts}, retry={biz_retry_interval}s")
 
