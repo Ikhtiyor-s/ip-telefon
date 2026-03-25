@@ -1626,6 +1626,16 @@ class TelegramStatsHandler:
         message_id = callback_message.get("message_id")
         chat_id = str(callback_message.get("chat", {}).get("id", ""))
 
+        # Tasdiqlangan sotuvchi tilini callback dan ham saqlash
+        cb_from = callback_query.get("from", {})
+        tg_lang = (cb_from.get("language_code") or "").lower()[:2]
+        if tg_lang and chat_id in self._verified_users:
+            biz_id = str(self._verified_users[chat_id].get("business_id", ""))
+            if biz_id and self._business_languages.get(biz_id) != tg_lang:
+                self._business_languages[biz_id] = tg_lang
+                self._save_business_languages()
+                logger.info(f"Biznes #{biz_id} tili callback dan saqlandi: {tg_lang}")
+
         logger.info(f"Callback query: {data}")
 
         # Answer callback

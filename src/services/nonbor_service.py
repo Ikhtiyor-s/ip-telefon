@@ -129,6 +129,15 @@ class NonborService:
         await self.get_businesses()
         return self._businesses_cache.get(biz_id)
 
+    async def get_business_detail(self, biz_id: int) -> Optional[Dict]:
+        """Biznesning to'liq profilini olish (detail endpoint, til maydoni uchun)"""
+        data = await self._make_request("GET", f"telegram_bot/businesses/{biz_id}/")
+        if not data:
+            return None
+        if isinstance(data, dict):
+            return data.get("result") or (data if data.get("id") else None)
+        return None
+
     async def get_order_status(self, order_id: int) -> Optional[str]:
         """
         Bitta buyurtmaning haqiqiy statusini olish
@@ -412,31 +421,35 @@ class NonborService:
                 phone = matched_biz.get("phone_number", "")
                 if phone:
                     result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
-                # DEBUG: Biznes API fieldlarini bir marta ko'rsatish
                 biz_id_log = result.get("business_id") or matched_biz.get("id")
-                logger.info(
-                    f"Biznes #{biz_id_log} API fieldlari (til uchun): "
-                    f"language={matched_biz.get('language')!r}, "
-                    f"owner_language={matched_biz.get('owner_language')!r}, "
-                    f"tg_language={matched_biz.get('tg_language')!r}, "
-                    f"language_code={matched_biz.get('language_code')!r}, "
-                    f"lang={matched_biz.get('lang')!r}, "
-                    f"locale={matched_biz.get('locale')!r}, "
-                    f"bot_language={matched_biz.get('bot_language')!r}"
-                )
-                # Biznes egasi tili (ilovada tanlangan)
-                lang = (
-                    matched_biz.get("language") or
-                    matched_biz.get("lang") or
-                    matched_biz.get("owner_language") or
-                    matched_biz.get("tg_language") or
-                    matched_biz.get("language_code") or
-                    matched_biz.get("locale") or
-                    matched_biz.get("bot_language") or
-                    "uz"
-                )
-                result["seller_language"] = str(lang).lower()[:2]
-                logger.info(f"Biznes #{biz_id_log} tili: {result['seller_language']} (raw: {lang!r})")
+
+                def _extract_lang(obj: dict) -> str:
+                    """Dict dan til maydonini qidirish"""
+                    return (
+                        obj.get("language") or obj.get("lang") or
+                        obj.get("owner_language") or obj.get("tg_language") or
+                        obj.get("language_code") or obj.get("locale") or
+                        obj.get("bot_language") or ""
+                    )
+
+                # 1. businesses/accepted/ cachesidan
+                lang = _extract_lang(matched_biz)
+                # 2. Order dagi business sub-objectidan (boshqa fieldlar bo'lishi mumkin)
+                if not lang:
+                    lang = _extract_lang(business)
+                # 3. Detail endpoint dan (telegram_bot/businesses/{id}/)
+                if not lang and biz_id_log:
+                    try:
+                        detail = await self.get_business_detail(int(biz_id_log))
+                        if detail:
+                            lang = _extract_lang(detail)
+                            if lang:
+                                logger.info(f"Biznes #{biz_id_log} tili detail endpointdan topildi: {lang!r}")
+                    except Exception:
+                        pass
+
+                result["seller_language"] = str(lang or "uz").lower()[:2]
+                logger.info(f"Biznes #{biz_id_log} tili: {result['seller_language']} (matched_biz keys: {sorted(matched_biz.keys())})")
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}
