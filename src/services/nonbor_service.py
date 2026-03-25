@@ -461,6 +461,10 @@ class NonborService:
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             result["client_name"] = f"{first_name} {last_name}".strip() or "Noma'lum"
+            # user.lang = seller (biznes egasi) ilovasidagi til
+            user_lang = (user.get("lang") or "").lower()[:2]
+            if user_lang:
+                result["seller_language"] = user_lang
 
         # Mijoz telefon raqami - bir nechta joydan qidirish
         client_phone = (
