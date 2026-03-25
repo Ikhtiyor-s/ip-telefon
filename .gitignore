@@ -12,3 +12,4 @@ tmpclaude-*
 test_voices/
 nul
 audio/cache/
+docker-compose.override.yml

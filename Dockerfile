@@ -34,7 +34,7 @@ RUN mkdir -p audio logs data && \
     chmod +x /docker-entrypoint.sh
 
 # Healthcheck - API server port 8585
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8585/api/autodialer/status')" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8585/api/autodialer/health')" || exit 1
 
 CMD ["/docker-entrypoint.sh"]

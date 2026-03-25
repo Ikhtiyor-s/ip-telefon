@@ -1,13 +1,6 @@
-# =============================================================================
-# AUTODIALER PRO - DOCKER COMPOSE
-# =============================================================================
-
 services:
-  # ===========================================================================
-  # ASTERISK PBX
-  # ===========================================================================
   asterisk:
-    image: andrius/asterisk:alpine-latest
+    image: andrius/asterisk:latest
     container_name: autodialer-asterisk
     restart: unless-stopped
     network_mode: host
@@ -16,7 +9,6 @@ services:
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.conf:/etc/asterisk/manager.conf:ro
       - autodialer-audio:/var/lib/asterisk/sounds/autodialer
-      - asterisk-logs:/var/log/asterisk
     environment:
       - TZ=Asia/Tashkent
     healthcheck:
@@ -25,9 +17,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # ===========================================================================
-  # AUTODIALER SERVICE
-  # ===========================================================================
   autodialer:
     build:
       context: .
@@ -35,6 +24,7 @@ services:
     image: autodialer-pro:latest
     container_name: autodialer-pro
     restart: unless-stopped
+    network_mode: host
     depends_on:
       asterisk:
         condition: service_healthy
@@ -44,12 +34,6 @@ services:
       - ./data:/app/data
     env_file:
       - .env.production
-    environment:
-      - ASTERISK_SOUNDS_PATH=/app/audio
-      - ASTERISK_PLAYBACK_PATH=/var/lib/asterisk/sounds/autodialer/cache
-      - PLATFORM=linux
-    network_mode: host
 
 volumes:
   autodialer-audio:
-  asterisk-logs:
