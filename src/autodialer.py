@@ -1691,12 +1691,6 @@ class AutodialerPro:
         for order_id in order_ids:
             try:
                 order_data = await self.nonbor.get_order_full_data(order_id)
-                # Local til override (Telegram botdan avtomatik aniqlangan)
-                if self.stats_handler:
-                    biz_id = str(order_data.get("business_id", ""))
-                    local_lang = self.stats_handler._business_languages.get(biz_id)
-                    if local_lang:
-                        order_data["seller_language"] = local_lang
                 seller_phone = order_data.get("seller_phone", "Noma'lum")
                 seller_name = order_data.get("seller_name", "")
                 logger.info(f"Buyurtma #{order_id}: seller_name='{seller_name}', seller_phone='{seller_phone}', til='{order_data.get('seller_language','uz')}'")
