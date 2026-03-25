@@ -974,6 +974,13 @@ class TelegramStatsHandler:
         )
         self._business_groups: Dict[str, str] = self._load_groups()
 
+        # Biznes tillari (Telegram language_code dan avtomatik yoki manual)
+        self._languages_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "business_languages.json"
+        )
+        self._business_languages: Dict[str, str] = self._load_business_languages()
+
         # Avtoqo'ng'iroq sozlamalari
         self._call_settings_file = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1043,6 +1050,25 @@ class TelegramStatsHandler:
                 json.dump(self._business_groups, f, indent=2)
         except Exception as e:
             logger.error(f"Guruhlar faylini saqlash xatosi: {e}")
+
+    def _load_business_languages(self) -> Dict[str, str]:
+        """Biznes tillari faylidan yuklash"""
+        try:
+            if os.path.exists(self._languages_file):
+                with open(self._languages_file, "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Biznes tillari yuklash xatosi: {e}")
+        return {}
+
+    def _save_business_languages(self):
+        """Biznes tillarini faylga saqlash"""
+        try:
+            os.makedirs(os.path.dirname(self._languages_file), exist_ok=True)
+            with open(self._languages_file, "w") as f:
+                json.dump(self._business_languages, f, indent=2)
+        except Exception as e:
+            logger.error(f"Biznes tillari saqlash xatosi: {e}")
 
     # ===== AVTOQO'NG'IROQ SOZLAMALARI =====
 
@@ -1494,6 +1520,16 @@ class TelegramStatsHandler:
             text = message.get("text", "")
             chat_id = str(message.get("chat", {}).get("id", ""))
             chat_type = message.get("chat", {}).get("type", "private")
+
+            # Tasdiqlangan sotuvchi tilini avtomatik saqlash
+            from_user = message.get("from", {})
+            tg_lang = (from_user.get("language_code") or "").lower()[:2]
+            if tg_lang and chat_id in self._verified_users:
+                biz_id = str(self._verified_users[chat_id].get("business_id", ""))
+                if biz_id and self._business_languages.get(biz_id) != tg_lang:
+                    self._business_languages[biz_id] = tg_lang
+                    self._save_business_languages()
+                    logger.info(f"Biznes #{biz_id} tili avtomatik saqlandi: {tg_lang}")
 
             # /id - guruh yoki private da chat ID ni ko'rsatish
             if text == "/id" or text.startswith("/id@"):

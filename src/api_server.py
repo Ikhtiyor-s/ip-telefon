@@ -72,6 +72,7 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/businesses/{biz_id}/config", self.get_business_config)
         r.add_post("/api/autodialer/businesses/{biz_id}/config", self.update_business_config)
         r.add_post("/api/autodialer/businesses/{biz_id}/set-group", self.set_business_group)
+        r.add_post("/api/autodialer/businesses/{biz_id}/set-language", self.set_business_language)
         r.add_get("/api/autodialer/businesses/{biz_id}/orders", self.get_business_orders)
         # Config
         r.add_get("/api/autodialer/config", self.get_config)
@@ -467,6 +468,22 @@ class AutodialerAPI:
             asyncio.create_task(self._sync_group_to_admin(biz_id, group_id))
 
         return self._json({"success": True, "group_id": group_id})
+
+    async def set_business_language(self, request):
+        """Biznes qo'ng'iroq tilini manual o'rnatish (uz/ru/en/kk)"""
+        biz_id = int(request.match_info["biz_id"])
+        if not self._stats_handler:
+            return self._err("Stats handler mavjud emas")
+
+        body = await request.json()
+        lang = str(body.get("language", "uz")).lower()[:2]
+        if lang not in ("uz", "ru", "en", "kk", "zh"):
+            return self._err(f"Noto'g'ri til: {lang}. Qabul qilinadi: uz, ru, en, kk, zh")
+
+        self._stats_handler._business_languages[str(biz_id)] = lang
+        self._stats_handler._save_business_languages()
+        logger.info(f"Biznes #{biz_id} tili o'rnatildi: {lang}")
+        return self._ok({"business_id": biz_id, "language": lang})
 
     async def _sync_group_to_admin(self, biz_id: int, group_id: str):
         """Admin panelga guruhni real-time yuborish"""
