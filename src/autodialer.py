@@ -40,6 +40,7 @@ from services import (
     TelegramService,
     TelegramNotificationManager,
     TelegramStatsHandler,
+    TelegramChatError,
     StatsService,
     StatsCallResult,
     OrderResult
@@ -252,6 +253,9 @@ class AutodialerPro:
 
         # Guruh xabari kutayotgan yangi buyurtmalar (2s loopda yuboriladi)
         self._pending_group_message_orders: set = set()
+
+        # Noto'g'ri guruh ID lar - "chat not found" xatosi kelgan, qayta urinmaslik
+        self._invalid_group_ids: set = set()
 
         # Reja buyurtmalar uchun 20 daqiqa oldin eslatma yuborilgan buyurtmalar
         self._planned_reminders_sent: set = set()
@@ -1014,6 +1018,12 @@ class AutodialerPro:
                     continue
 
                 group_chat_id = self.stats_handler._business_groups[biz_id]
+
+                # Noto'g'ri guruh ID - qayta urinmaymiz
+                if group_chat_id in self._invalid_group_ids:
+                    logger.debug(f"Buyurtma #{order_id}: guruh {group_chat_id} noto'g'ri (invalid), o'tkazib yuborildi")
+                    continue
+
                 status = order.get("state", "CHECKING").upper()
 
                 # PENDING va to'lov kutilayotgan buyurtmalarni o'tkazib yuborish
@@ -1148,11 +1158,16 @@ class AutodialerPro:
                     # Mavjud xabar - status o'zgargan bo'lsa yangilash
                     tracked = self._group_order_messages[order_id]
                     if tracked.get("status") != display_status:
-                        success = await self.telegram.update_business_order_message(
-                            message_id=tracked["msg_id"],
-                            order_data=order_data,
-                            chat_id=group_chat_id
-                        )
+                        try:
+                            success = await self.telegram.update_business_order_message(
+                                message_id=tracked["msg_id"],
+                                order_data=order_data,
+                                chat_id=group_chat_id
+                            )
+                        except TelegramChatError as chat_err:
+                            logger.warning(f"Guruh {group_chat_id} noto'g'ri (yangilashda), qayta urinmaslik: {chat_err}")
+                            self._invalid_group_ids.add(group_chat_id)
+                            success = False
                         if success:
                             tracked["status"] = display_status
                             tracked["order_data"] = order_data
@@ -1203,6 +1218,12 @@ class AutodialerPro:
                                 logger.error(f"Guruhga xabar YUBORILMADI: buyurtma #{order_id}, chat_id={group_chat_id} - Telegram None qaytardi")
                                 # Qayta urinish uchun navbatga qo'shish
                                 self._pending_group_message_orders.add(order_id)
+                        except TelegramChatError as chat_err:
+                            # Doimiy xato: guruh topilmadi yoki bot chiqarib yuborilgan
+                            logger.warning(f"Guruh {group_chat_id} noto'g'ri, qayta urinmaslik: {chat_err}")
+                            self._invalid_group_ids.add(group_chat_id)
+                            # Pending dan ham olib tashlash
+                            self._pending_group_message_orders.discard(order_id)
                         except Exception as send_err:
                             logger.error(f"Guruhga xabar yuborishda xato: buyurtma #{order_id}: {send_err}")
                             self._pending_group_message_orders.add(order_id)

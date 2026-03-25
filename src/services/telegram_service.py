@@ -16,6 +16,11 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 
+class TelegramChatError(Exception):
+    """Doimiy Telegram chat xatosi (chat topilmadi, bot chiqarib yuborilgan, bloklangan)"""
+    pass
+
+
 # Callback data prefixes
 CALLBACK_STATS = "stats"
 CALLBACK_CALLS_1 = "calls_1"
@@ -162,7 +167,22 @@ class TelegramService:
                 if result.get("ok"):
                     return result.get("result")
                 else:
-                    logger.error(f"Telegram xatosi: {result.get('description')}")
+                    desc = result.get("description", "")
+                    error_code = result.get("error_code", 0)
+                    logger.error(f"Telegram xatosi: {desc}")
+                    # Doimiy xatolar - qayta urinish befoyda
+                    permanent_keywords = (
+                        "chat not found",
+                        "bot was blocked by the user",
+                        "bot is not a member",
+                        "user is deactivated",
+                        "group chat was upgraded",
+                        "supergroup chat was upgraded",
+                        "have no rights to send",
+                        "need administrator rights",
+                    )
+                    if error_code == 403 or any(kw in desc.lower() for kw in permanent_keywords):
+                        raise TelegramChatError(desc)
                     return None
 
         except aiohttp.ClientError as e:
