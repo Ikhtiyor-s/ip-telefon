@@ -407,6 +407,7 @@ class NonborService:
                     "uz"
                 )
                 result["seller_language"] = str(lang).lower()[:2]
+                logger.info(f"Biznes #{result.get('business_id')} tili: {result['seller_language']} (raw: {lang})")
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}
@@ -415,7 +416,9 @@ class NonborService:
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             result["client_name"] = f"{first_name} {last_name}".strip() or "Noma'lum"
-            result["seller_language"] = (user.get("lang") or result.get("seller_language") or "uz").lower()[:2]
+            # MUHIM: seller_language bu yerda O'ZGARTIRILMAYDI!
+            # user.lang — bu buyurtmachi (mijoz) tili, sotuvchi tili emas.
+            # Sotuvchi tili yuqorida matched_biz.language dan o'rnatilgan.
 
         # Mijoz telefon raqami - bir nechta joydan qidirish
         client_phone = (
