@@ -113,6 +113,12 @@ class NonborService:
         for biz in businesses:
             self._businesses_cache[biz["id"]] = biz
 
+        # Birinchi yuklashda barcha keylarni ko'rish (debug)
+        if businesses and not getattr(self, "_biz_keys_logged", False):
+            self._biz_keys_logged = True
+            sample = businesses[0]
+            logger.info(f"Biznes API fieldlari (namuna): {sorted(sample.keys())}")
+
         return businesses
 
     async def get_order_status(self, order_id: int) -> Optional[str]:
@@ -398,16 +404,31 @@ class NonborService:
                 phone = matched_biz.get("phone_number", "")
                 if phone:
                     result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
+                # DEBUG: Biznes API fieldlarini bir marta ko'rsatish
+                biz_id_log = result.get("business_id") or matched_biz.get("id")
+                logger.info(
+                    f"Biznes #{biz_id_log} API fieldlari (til uchun): "
+                    f"language={matched_biz.get('language')!r}, "
+                    f"owner_language={matched_biz.get('owner_language')!r}, "
+                    f"tg_language={matched_biz.get('tg_language')!r}, "
+                    f"language_code={matched_biz.get('language_code')!r}, "
+                    f"lang={matched_biz.get('lang')!r}, "
+                    f"locale={matched_biz.get('locale')!r}, "
+                    f"bot_language={matched_biz.get('bot_language')!r}"
+                )
                 # Biznes egasi tili (ilovada tanlangan)
                 lang = (
                     matched_biz.get("language") or
+                    matched_biz.get("lang") or
                     matched_biz.get("owner_language") or
                     matched_biz.get("tg_language") or
                     matched_biz.get("language_code") or
+                    matched_biz.get("locale") or
+                    matched_biz.get("bot_language") or
                     "uz"
                 )
                 result["seller_language"] = str(lang).lower()[:2]
-                logger.info(f"Biznes #{result.get('business_id')} tili: {result['seller_language']} (raw: {lang})")
+                logger.info(f"Biznes #{biz_id_log} tili: {result['seller_language']} (raw: {lang!r})")
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}
