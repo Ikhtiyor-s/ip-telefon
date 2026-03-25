@@ -43,8 +43,8 @@ ORDER_MESSAGES = {
         "Assalomu alaykum! Bu Nonbor xizmati. Sizda {count} ta yangi buyurtma keldi, iltimos ilovani tekshiring.",
     ),
     "ru": (
-        "Здравствуйте! Звонит сервис Nonbor. У вас новый заказ, пожалуйста проверьте приложение.",
-        "Здравствуйте! Звонит сервис Nonbor. У вас {count} новых заказа, пожалуйста проверьте приложение.",
+        "Здравствуйте! Звонит сервис Нонбо́р. У вас новый заказ, пожалуйста проверьте приложение.",
+        "Здравствуйте! Звонит сервис Нонбо́р. У вас {count} новых заказа, пожалуйста проверьте приложение.",
     ),
     "en": (
         "Hello! This is Nonbor calling. You have a new order, please check your app.",
@@ -67,8 +67,8 @@ PLANNED_MESSAGES = {
         "Assalomu alaykum! Bu Nonbor xizmati. Bugun {count} ta rejalashtirilgan buyurtmangiz bor, iltimos tayyorlashni boshlang.",
     ),
     "ru": (
-        "Здравствуйте! Напоминает сервис Nonbor. У вас запланированный заказ на сегодня, пожалуйста начните подготовку.",
-        "Здравствуйте! Напоминает сервис Nonbor. У вас {count} запланированных заказа на сегодня, пожалуйста начните подготовку.",
+        "Здравствуйте! Напоминает сервис Нонбо́р. У вас запланированный заказ на сегодня, пожалуйста начните подготовку.",
+        "Здравствуйте! Напоминает сервис Нонбо́р. У вас {count} запланированных заказа на сегодня, пожалуйста начните подготовку.",
     ),
     "en": (
         "Hello! A reminder from Nonbor. You have a scheduled order today, please start preparing.",

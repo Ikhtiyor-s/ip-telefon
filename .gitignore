@@ -10,3 +10,4 @@ tmpclaude-*
 *.log
 test_voices/
 nul
+audio/cache/
