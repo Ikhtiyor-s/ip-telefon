@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 logs/
 data/
+!data/business_languages.json
 tmpclaude-*
 .env
 *.log
