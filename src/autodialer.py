@@ -546,6 +546,58 @@ class AutodialerPro:
         except Exception as e:
             logger.error(f"Reja eslatma qo'ng'iroq xatosi: {e}")
 
+    async def call_business_by_id(self, biz_id: int) -> dict:
+        """
+        Biznes ID bo'yicha qo'ng'iroq qilish (AI / tashqi trigger uchun).
+
+        1. Nonbor API dan biznes telefon + til oladi
+        2. TTS audio yaratadi
+        3. Asterisk orqali qo'ng'iroq qiladi (background task)
+        """
+        if not self.nonbor:
+            return {"success": False, "error": "Nonbor servisi mavjud emas"}
+
+        biz = await self.nonbor.get_business_by_id(biz_id)
+        if not biz:
+            return {"success": False, "error": f"Biznes #{biz_id} topilmadi"}
+
+        # Telefon raqam
+        raw_phone = biz.get("phone_number") or biz.get("phone") or ""
+        if not raw_phone:
+            return {"success": False, "error": f"Biznes #{biz_id} telefon raqami yo'q"}
+
+        digits = "".join(filter(str.isdigit, str(raw_phone)))
+        if len(digits) == 9:
+            phone = f"+998{digits}"
+        elif len(digits) == 12 and digits.startswith("998"):
+            phone = f"+{digits}"
+        elif digits:
+            phone = f"+{digits}"
+        else:
+            return {"success": False, "error": f"Biznes #{biz_id} telefon formati noto'g'ri: {raw_phone!r}"}
+
+        # Til
+        lang = (
+            biz.get("language") or biz.get("lang") or
+            biz.get("owner_language") or biz.get("tg_language") or
+            biz.get("language_code") or biz.get("locale") or "uz"
+        )
+        lang = str(lang).lower()[:2]
+
+        # TTS audio
+        audio_path = await self.tts.generate_order_message(count=1, lang=lang)
+        if not audio_path:
+            return {"success": False, "error": "TTS audio yaratilmadi"}
+
+        # Asterisk qo'ng'iroq (background — API javob kutmaydi)
+        logger.info(f"Biznes #{biz_id} qo'ng'iroq boshlandi: {phone}, til: {lang}")
+        asyncio.create_task(self.call_manager.make_call_with_retry(
+            phone_number=phone,
+            audio_file=str(audio_path),
+        ))
+
+        return {"success": True, "phone": phone, "language": lang, "business": biz.get("title", "")}
+
     async def start(self):
         """Autodialer ni ishga tushirish"""
         logger.info("=" * 60)

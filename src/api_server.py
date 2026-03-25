@@ -17,6 +17,7 @@ import asyncio
 from datetime import date, timedelta
 from pathlib import Path
 from aiohttp import web
+import aiohttp
 
 logger = logging.getLogger("api_server")
 
@@ -84,6 +85,8 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/chat-info", self.get_chat_info)
         # Health
         r.add_get("/api/autodialer/health", self.health)
+        # AI trigger — biznes ID bo'yicha qo'ng'iroq
+        r.add_post("/api/autodialer/call-business", self.call_business)
         # OPTIONS preflight uchun
         r.add_route("OPTIONS", "/{path:.*}", self._options_handler)
 
@@ -452,12 +455,32 @@ class AutodialerAPI:
 
         body = await request.json()
         group_id = str(body.get("group_id", "")).strip()
+        source = body.get("_source", "api")  # aylana oldini olish
 
         self._stats_handler._business_groups[str(biz_id)] = group_id
         self._stats_handler._save_groups()
 
         logger.info(f"Biznes #{biz_id} guruh o'rnatildi: {group_id}")
+
+        # Admin panelga real-time yuborish (faqat admin paneldan kelmagan bo'lsa)
+        if source != "admin":
+            asyncio.create_task(self._sync_group_to_admin(biz_id, group_id))
+
         return self._json({"success": True, "group_id": group_id})
+
+    async def _sync_group_to_admin(self, biz_id: int, group_id: str):
+        """Admin panelga guruhni real-time yuborish"""
+        admin_url = os.getenv("ADMIN_PANEL_URL", "http://localhost:8088")
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.put(
+                    f"{admin_url}/api/business-groups/{biz_id}",
+                    json={"group_id": group_id, "_source": "autodialer"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+            logger.info(f"Admin panelga guruh sinxronlandi: biz={biz_id}")
+        except Exception as e:
+            logger.warning(f"Admin panel sinxronlash xatosi: {e}")
 
     async def get_business_orders(self, request):
         """Biznes uchun buyurtmalar"""
@@ -756,6 +779,41 @@ class AutodialerAPI:
             return self._json({"success": False, "message": "Chat topilmadi"})
         except Exception as e:
             return self._json({"success": False, "message": str(e)})
+
+    # ===== CALL BUSINESS (AI trigger) =====
+
+    async def call_business(self, request):
+        """
+        Biznes ID bo'yicha qo'ng'iroq qilish.
+
+        POST /api/autodialer/call-business
+        Body: {"business_id": 24}
+
+        Nonbor API dan o'sha biznesning telefon raqami va tilini olib,
+        TTS audio generatsiya qilib Asterisk orqali qo'ng'iroq qiladi.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return self._err("JSON tanasi noto'g'ri")
+
+        biz_id = body.get("business_id")
+        if not biz_id:
+            return self._err("business_id talab qilinadi")
+
+        if not self.autodialer:
+            return self._err("Autodialer mavjud emas", status=503)
+
+        try:
+            result = await self.autodialer.call_business_by_id(int(biz_id))
+        except Exception as e:
+            logger.error(f"call_business xato: {e}")
+            return self._err(str(e), status=500)
+
+        if result.get("success"):
+            return self._ok(result)
+        else:
+            return self._err(result.get("error", "Noma'lum xato"))
 
     # ===== HEALTH =====
 

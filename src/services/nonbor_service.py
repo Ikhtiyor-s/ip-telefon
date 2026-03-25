@@ -121,6 +121,14 @@ class NonborService:
 
         return businesses
 
+    async def get_business_by_id(self, biz_id: int) -> Optional[Dict]:
+        """Biznes ID bo'yicha biznes ma'lumotlarini olish"""
+        if biz_id in self._businesses_cache:
+            return self._businesses_cache[biz_id]
+        # Cache bo'sh bo'lsa API dan yangilash
+        await self.get_businesses()
+        return self._businesses_cache.get(biz_id)
+
     async def get_order_status(self, order_id: int) -> Optional[str]:
         """
         Bitta buyurtmaning haqiqiy statusini olish
