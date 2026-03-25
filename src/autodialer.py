@@ -592,6 +592,9 @@ class AutodialerPro:
             logger.info("Telegram stats handler boshlash...")
             await self.stats_handler.start_polling()
 
+        # Startup: admin paneldan guruhlarni yuklash (business_groups.json ni to'ldirish)
+        await self._sync_groups_from_admin()
+
         # Ishga tushganda sinxronizatsiya - Nonbor API va Telegram
         await self._sync_on_startup()
 
@@ -636,6 +639,34 @@ class AutodialerPro:
             await self.telegram.close()
 
         logger.info("Autodialer to'xtatildi")
+
+    async def _sync_groups_from_admin(self):
+        """Startup: admin paneldan barcha guruh ID larini yuklash va local bilan birlashtirish"""
+        if not self.stats_handler:
+            return
+        admin_url = os.getenv("ADMIN_PANEL_URL", "http://localhost:8088")
+        try:
+            import aiohttp as _aiohttp
+            async with _aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{admin_url}/api/business-groups",
+                    timeout=_aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        groups = data.get("groups", {})
+                        merged = 0
+                        for biz_id, group_id in groups.items():
+                            if biz_id not in self.stats_handler._business_groups:
+                                self.stats_handler._business_groups[biz_id] = group_id
+                                merged += 1
+                        if merged > 0:
+                            self.stats_handler._save_groups()
+                            logger.info(f"Startup: admin paneldan {merged} ta guruh yuklandi")
+                        else:
+                            logger.info(f"Startup: guruhlar sinxron ({len(groups)} ta)")
+        except Exception as e:
+            logger.warning(f"Startup: admin paneldan guruhlarni yuklashda xato: {e}")
 
     async def _sync_on_startup(self):
         """
