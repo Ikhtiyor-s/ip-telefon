@@ -381,6 +381,9 @@ class NonborService:
 
         # Biznes (sotuvchi) ma'lumotlari
         business = order.get("business") or {}
+        if business and not getattr(self, "_order_biz_keys_logged", False):
+            self._order_biz_keys_logged = True
+            logger.info(f"Order.business to'liq ob'yekti (get-order-for-courier): {business}")
         if business:
             result["business_id"] = business.get("id")
             result["seller_name"] = business.get("title", "Noma'lum")
