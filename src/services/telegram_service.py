@@ -1475,6 +1475,15 @@ class TelegramStatsHandler:
             chat_id = str(message.get("chat", {}).get("id", ""))
             chat_type = message.get("chat", {}).get("type", "private")
 
+            # /id - guruh yoki private da chat ID ni ko'rsatish
+            if text == "/id" or text.startswith("/id@"):
+                await self.telegram.send_message(
+                    text=f"<code>{chat_id}</code>",
+                    chat_id=chat_id,
+                    parse_mode="HTML"
+                )
+                return
+
             # Guruh chatlarida hech qanday komandaga javob bermaslik
             if chat_type in ("group", "supergroup"):
                 return
