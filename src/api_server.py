@@ -512,22 +512,23 @@ class AutodialerAPI:
         s = self._stats.get_period_stats("yearly")
         records = [r for r in reversed(s.order_records)]
 
-        # Business ID yoki seller_name bo'yicha filter (seller_name ichida biz_id qidirish)
-        # Buyurtma recordlarda biz_id yo'q, phone bo'yicha filter qilamiz
+        # Bizneslar ro'yxatidan phone va title olish
         seller_name = ""
 
-        # Nonbor orders dan biz telefon olishga harakat qilamiz
         if self.autodialer and self.autodialer.nonbor:
-            orders = await self.autodialer.nonbor.get_orders()
-            if orders:
-                for o in orders:
-                    biz = o.get("business") or {}
-                    if biz.get("id") == biz_id:
-                        seller_name = biz.get("title", "")
-                        phone = biz.get("phone", "")
-                        if phone:
-                            records = [r for r in records if r.get("seller_phone", "").endswith(phone[-9:])]
-                        break
+            all_biz = await self.autodialer.nonbor.get_businesses()
+            for biz in all_biz:
+                if biz.get("id") == biz_id:
+                    seller_name = biz.get("title", "")
+                    phone = biz.get("phone_number", "") or biz.get("phone", "")
+                    if phone:
+                        tail = phone.lstrip("+")[-9:]
+                        records = [r for r in records if r.get("seller_phone", "").lstrip("+")[-9:] == tail]
+                    else:
+                        records = []
+                    break
+            else:
+                records = []
 
         total = len(records)
         total_pages = max(1, (total + page_size - 1) // page_size)
@@ -586,66 +587,52 @@ class AutodialerAPI:
             return self._err("Autodialer ishlamayapti")
 
         changed = []
-        env_changes = {}  # .env ga yoziladigan o'zgarishlar
+        env_changes = {}
 
-        # === Vaqt sozlamalari (real-time + .env) ===
-        if "wait_before_call" in body:
-            ad.wait_before_call = int(body["wait_before_call"])
-            env_changes["WAIT_BEFORE_CALL"] = str(ad.wait_before_call)
-            changed.append(f"wait_before_call={ad.wait_before_call}")
+        # Oddiy int fieldlar: (body_key, attr, env_key, extra_setter)
+        INT_FIELDS = [
+            ("wait_before_call",     "wait_before_call",     "WAIT_BEFORE_CALL",     None),
+            ("telegram_alert_time",  "telegram_alert_time",  "TELEGRAM_ALERT_TIME",  None),
+            ("planned_reminder_time","planned_reminder_time","PLANNED_REMINDER_TIME", None),
+            ("max_call_attempts",    "max_call_attempts",    "MAX_CALL_ATTEMPTS",
+                lambda v: setattr(ad.call_manager, "max_attempts", v)),
+            ("retry_interval",       "retry_interval",       "RETRY_INTERVAL",
+                lambda v: setattr(ad.call_manager, "retry_interval", v)),
+        ]
+        for key, attr, env_key, extra in INT_FIELDS:
+            if key in body:
+                val = int(body[key])
+                setattr(ad, attr, val)
+                env_changes[env_key] = str(val)
+                changed.append(f"{key}={val}")
+                if extra: extra(val)
 
-        if "telegram_alert_time" in body:
-            ad.telegram_alert_time = int(body["telegram_alert_time"])
-            env_changes["TELEGRAM_ALERT_TIME"] = str(ad.telegram_alert_time)
-            changed.append(f"telegram_alert_time={ad.telegram_alert_time}")
-
-        if "max_call_attempts" in body:
-            ad.max_call_attempts = int(body["max_call_attempts"])
-            ad.call_manager.max_attempts = ad.max_call_attempts
-            env_changes["MAX_CALL_ATTEMPTS"] = str(ad.max_call_attempts)
-            changed.append(f"max_call_attempts={ad.max_call_attempts}")
-
-        if "retry_interval" in body:
-            ad.retry_interval = int(body["retry_interval"])
-            ad.call_manager.retry_interval = ad.retry_interval
-            env_changes["RETRY_INTERVAL"] = str(ad.retry_interval)
-            changed.append(f"retry_interval={ad.retry_interval}")
-
-        if "planned_reminder_time" in body:
-            ad.planned_reminder_time = int(body["planned_reminder_time"])
-            env_changes["PLANNED_REMINDER_TIME"] = str(ad.planned_reminder_time)
-            changed.append(f"planned_reminder_time={ad.planned_reminder_time}")
-
-        # === Telegram sozlamalari (real-time) ===
+        # Telegram chat_id
         if "telegram_chat_id" in body:
-            new_chat_id = str(body["telegram_chat_id"]).strip()
-            if ad.telegram:
-                ad.telegram.default_chat_id = new_chat_id
-            env_changes["TELEGRAM_CHAT_ID"] = new_chat_id
-            changed.append(f"telegram_chat_id={new_chat_id}")
+            v = str(body["telegram_chat_id"]).strip()
+            if ad.telegram: ad.telegram.default_chat_id = v
+            env_changes["TELEGRAM_CHAT_ID"] = v
+            changed.append(f"telegram_chat_id={v}")
 
-        # === Nonbor API sozlamalari (real-time) ===
+        # Nonbor API
         if "nonbor_base_url" in body:
-            new_url = str(body["nonbor_base_url"]).strip()
-            if ad.nonbor:
-                ad.nonbor.base_url = new_url
-            env_changes["NONBOR_BASE_URL"] = new_url
-            os.environ["NONBOR_BASE_URL"] = new_url
-            changed.append(f"nonbor_base_url={new_url}")
+            v = str(body["nonbor_base_url"]).strip()
+            if ad.nonbor: ad.nonbor.base_url = v
+            env_changes["NONBOR_BASE_URL"] = os.environ["NONBOR_BASE_URL"] = v
+            changed.append(f"nonbor_base_url={v}")
 
         if "nonbor_secret" in body:
-            new_secret = str(body["nonbor_secret"]).strip()
-            if ad.nonbor and hasattr(ad.nonbor, 'headers'):
-                ad.nonbor.headers["X-Telegram-Bot-Secret"] = new_secret
-            env_changes["NONBOR_SECRET"] = new_secret
-            os.environ["NONBOR_SECRET"] = new_secret
+            v = str(body["nonbor_secret"]).strip()
+            if ad.nonbor and hasattr(ad.nonbor, "headers"):
+                ad.nonbor.headers["X-Telegram-Bot-Secret"] = v
+            env_changes["NONBOR_SECRET"] = os.environ["NONBOR_SECRET"] = v
             changed.append("nonbor_secret=***")
 
-        # === Seller telefon ===
         if "seller_phone" in body:
-            ad.seller_phone = str(body["seller_phone"]).strip()
-            env_changes["SELLER_PHONE"] = ad.seller_phone
-            changed.append(f"seller_phone={ad.seller_phone}")
+            v = str(body["seller_phone"]).strip()
+            ad.seller_phone = v
+            env_changes["SELLER_PHONE"] = v
+            changed.append(f"seller_phone={v}")
 
         # === .env faylni yangilash (restart bo'lganda ham saqlansin) ===
         if env_changes:

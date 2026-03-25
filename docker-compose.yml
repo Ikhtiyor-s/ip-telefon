@@ -44,6 +44,10 @@ services:
       - ./data:/app/data
     env_file:
       - .env.production
+    environment:
+      - ASTERISK_SOUNDS_PATH=/app/audio
+      - ASTERISK_PLAYBACK_PATH=/var/lib/asterisk/sounds/autodialer/cache
+      - PLATFORM=linux
     network_mode: host
 
 volumes:

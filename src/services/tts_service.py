@@ -60,28 +60,12 @@ ORDER_MESSAGES = {
     ),
 }
 
-# Reja (scheduled) eslatma xabarlari: (1 ta buyurtma, ko'p buyurtma)
+# Reja (scheduled) eslatma xabarlari: faqat 1 ta xabar har bir til uchun
 PLANNED_MESSAGES = {
-    "uz": (
-        "Assalomu alaykum! Bu Nonbor xizmati. Bugun 1 ta rejalashtirilgan buyurtmangiz bor, iltimos tayyorlashni boshlang.",
-        "Assalomu alaykum! Bu Nonbor xizmati. Bugun {count} ta rejalashtirilgan buyurtmangiz bor, iltimos tayyorlashni boshlang.",
-    ),
-    "ru": (
-        "Здравствуйте! Напоминает сервис Нонбо́р. У вас запланированный заказ на сегодня, пожалуйста начните подготовку.",
-        "Здравствуйте! Напоминает сервис Нонбо́р. У вас {count} запланированных заказа на сегодня, пожалуйста начните подготовку.",
-    ),
-    "en": (
-        "Hello! A reminder from Nonbor. You have a scheduled order today, please start preparing.",
-        "Hello! A reminder from Nonbor. You have {count} scheduled orders today, please start preparing.",
-    ),
-    "zh": (
-        "您好！Nonbor温馨提醒。您今天有一个计划订单，请开始准备。",
-        "您好！Nonbor温馨提醒。您今天有{count}个计划订单，请开始准备。",
-    ),
-    "kk": (
-        "Сәлеметсіз бе! Nonbor еске салады. Бүгін 1 жоспарланған тапсырысыңыз бар, дайындауды бастаңыз.",
-        "Сәлеметсіз бе! Nonbor еске салады. Бүгін {count} жоспарланған тапсырысыңыз бар, дайындауды бастаңыз.",
-    ),
+    "uz": "Assalomu alaykum! Bu Nonbor xizmati. Sizda rejalashtirilgan buyurtma bor. Buyurtmangizni tayyorlang.",
+    "ru": "Здравствуйте! Звонит сервис Нонбо́р. У вас запланированный заказ. Пожалуйста, подготовьте ваш заказ.",
+    "en": "Hello! This is Nonbor calling. You have a scheduled order. Please prepare your order.",
+    "zh": "您好！Nonbor来电提醒。您有一个计划订单，请准备好您的订单。",
 }
 
 # Asosiy tillar - oldindan generate qilinadi (startup da)
@@ -101,9 +85,10 @@ def _order_message_text(count: int, lang: str) -> str:
     return _get_message(ORDER_MESSAGES, count, lang)
 
 
-def _planned_message_text(count: int, lang: str) -> str:
+def _planned_message_text(lang: str) -> str:
     """Reja eslatma xabari matni"""
-    return _get_message(PLANNED_MESSAGES, count, lang)
+    lang = (lang or DEFAULT_LANG).lower()
+    return PLANNED_MESSAGES.get(lang) or PLANNED_MESSAGES.get(DEFAULT_LANG)
 
 
 class BaseTTSProvider(ABC):
@@ -264,15 +249,10 @@ class TTSService:
         """Matnni cache bilan synthesize qilish (ichki yordamchi)"""
         lang = (lang or DEFAULT_LANG).lower()
         cache_path = self._get_cache_path(text, lang)
-        if cache_path.exists():
-            logger.debug(f"TTS cache dan olindi: lang={lang}")
-            return cache_path
-        provider = self._get_provider(lang)
-        success = await provider.synthesize(text, cache_path)
-        if success:
-            await self._sync_single_file(cache_path)
-            return cache_path
-        return None
+        if not cache_path.exists():
+            if not await self._get_provider(lang).synthesize(text, cache_path):
+                return None
+        return cache_path
 
     async def generate_order_message(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """
@@ -287,40 +267,10 @@ class TTSService:
         logger.info(f"TTS order: lang={lang}, count={count}")
         return await self._synthesize_with_cache(text, lang)
 
-    async def generate_planned_message(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """
-        Reja eslatma xabarini tilga qarab yaratish
-
-        Args:
-            count: Rejalashtirilgan buyurtmalar soni
-            lang: Til kodi ('uz', 'ru', 'en', 'zh', ...)
-        """
+    async def generate_planned_message(self, lang: str = DEFAULT_LANG) -> Optional[Path]:
+        """Reja eslatma xabarini tilga qarab yaratish"""
         lang = (lang or DEFAULT_LANG).lower()
-        text = _planned_message_text(count, lang)
-        logger.info(f"TTS planned: lang={lang}, count={count}")
-        return await self._synthesize_with_cache(text, lang)
-
-    async def generate_custom_message(self, text: str, filename: str = None, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """
-        Maxsus xabar yaratish
-
-        Args:
-            text: Xabar matni
-            filename: Fayl nomi (ixtiyoriy)
-            lang: Til kodi
-        """
-        lang = (lang or DEFAULT_LANG).lower()
-        if filename:
-            output_path = self.audio_dir / f"{filename}.wav"
-            if output_path.exists():
-                return output_path
-            provider = self._get_provider(lang)
-            success = await provider.synthesize(text, output_path)
-            if success:
-                await self._sync_single_file(output_path)
-                return output_path
-            return None
-        return await self._synthesize_with_cache(text, lang)
+        return await self._synthesize_with_cache(_planned_message_text(lang), lang)
 
     def get_audio_path(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Mavjud audio faylni olish (agar cache da bo'lsa)"""
@@ -330,111 +280,16 @@ class TTSService:
         return cache_path if cache_path.exists() else None
 
     async def pregenerate_messages(self, max_count: int = 20):
-        """
-        Asosiy tillar uchun oldindan xabarlar yaratish (startup da chaqiriladi)
-        Tillar: PRIMARY_LANGS = uz, ru, en, zh
-        """
+        """Asosiy tillar uchun oldindan xabarlar yaratish (startup da chaqiriladi)"""
         logger.info(f"TTS oldindan yaratish: 1-{max_count} buyurtma, tillar={PRIMARY_LANGS}")
-
         for lang in PRIMARY_LANGS:
+            await self.generate_planned_message(lang=lang)
             for i in range(1, max_count + 1):
                 await self.generate_order_message(i, lang=lang)
-                await self.generate_planned_message(i, lang=lang)
-                logger.debug(f"TTS yaratildi: {lang}/{i}")
-
         logger.info("TTS oldindan yaratish tugadi")
-        await asyncio.to_thread(self._sync_to_wsl_blocking)
-
-    async def _sync_single_file(self, wav_path: Path):
-        """Bitta audio faylni Asterisk katalogiga ko'chirish"""
-        import shutil
-
-        default_platform = "wsl" if os.name == "nt" else "linux"
-        platform = os.getenv("PLATFORM", default_platform).lower()
-        default_sounds = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
-        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", default_sounds)
-
-        try:
-            if platform == "linux":
-                os.makedirs(sounds_path, exist_ok=True)
-                dest = os.path.join(sounds_path, wav_path.name)
-                shutil.copy2(str(wav_path), dest)
-                logger.debug(f"Audio ko'chirildi: {wav_path.name} -> {sounds_path}")
-            else:
-                import subprocess
-                wav_wsl = str(wav_path).replace("\\", "/")
-                if len(wav_wsl) > 1 and wav_wsl[1] == ":":
-                    wav_wsl = f"/mnt/{wav_wsl[0].lower()}{wav_wsl[2:]}"
-                subprocess.run(
-                    ["wsl", "mkdir", "-p", sounds_path],
-                    capture_output=True, timeout=5
-                )
-                subprocess.run(
-                    ["wsl", "cp", wav_wsl, f"{sounds_path}/"],
-                    capture_output=True, timeout=10
-                )
-        except Exception as e:
-            logger.warning(f"Audio sync xatosi ({wav_path.name}): {e}")
-
-    def _sync_to_wsl_blocking(self):
-        """sync_to_wsl ning sinxron versiyasi (asyncio.to_thread uchun)"""
-        import subprocess
-        import shutil
-
-        cache_dir = self.audio_dir / "cache"
-        if not cache_dir.exists():
-            logger.warning("Cache katalogi topilmadi")
-            return
-
-        default_platform = "wsl" if os.name == "nt" else "linux"
-        platform = os.getenv("PLATFORM", default_platform).lower()
-        default_sounds = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
-        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", default_sounds)
-
-        try:
-            import glob
-            wav_files = glob.glob(str(cache_dir / "*.wav"))
-
-            if not wav_files:
-                logger.warning(f"Hech qanday .wav fayl topilmadi: {cache_dir}")
-                return
-
-            if platform == "linux":
-                os.makedirs(sounds_path, exist_ok=True)
-                for wav_file in wav_files:
-                    dest = os.path.join(sounds_path, os.path.basename(wav_file))
-                    shutil.copy2(wav_file, dest)
-                logger.info(f"Audio fayllar ko'chirildi: {len(wav_files)} ta fayl -> {sounds_path}")
-            else:
-                subprocess.run(
-                    ["wsl", "mkdir", "-p", sounds_path],
-                    capture_output=True, timeout=10
-                )
-                for wav_file in wav_files:
-                    wav_file_wsl = str(wav_file).replace("\\", "/")
-                    if len(wav_file_wsl) > 1 and wav_file_wsl[1] == ":":
-                        wav_file_wsl = f"/mnt/{wav_file_wsl[0].lower()}{wav_file_wsl[2:]}"
-                    result = subprocess.run(
-                        ["wsl", "cp", wav_file_wsl, f"{sounds_path}/"],
-                        capture_output=True, timeout=10
-                    )
-                    if result.returncode != 0:
-                        logger.warning(f"Fayl ko'chirishda xato {wav_file}: {result.stderr.decode()}")
-                logger.info(f"Audio fayllar WSL ga ko'chirildi: {len(wav_files)} ta fayl")
-
-        except subprocess.TimeoutExpired:
-            logger.error("WSL buyrug'i timeout")
-        except Exception as e:
-            logger.error(f"Audio sync xatosi: {e}")
 
     async def sync_to_wsl(self):
-        """
-        Audio fayllarni Asterisk katalogiga ko'chirish
-
-        PLATFORM env ga qarab:
-        - wsl: WSL /tmp/autodialer/ ga ko'chirish (Windows development)
-        - linux: To'g'ridan-to'g'ri ASTERISK_SOUNDS_PATH ga ko'chirish (Production)
-        """
+        """WSL development uchun audio sync (production da ishlatilmaydi)"""
         import subprocess
         import shutil
 

@@ -385,6 +385,25 @@ class AutodialerPro:
         except Exception as e:
             logger.error(f"Reja eslatmalarini saqlashda xato: {e}")
 
+    @staticmethod
+    def _format_phone(raw: str) -> Optional[str]:
+        digits = ''.join(filter(str.isdigit, str(raw or "")))
+        if len(digits) == 9:
+            return f"+998{digits}"
+        if len(digits) == 12 and digits.startswith("998"):
+            return f"+{digits}"
+        if len(digits) > 9:
+            return f"+{digits}"
+        return None
+
+    def _resolve_lang(self, biz_id, api_lang: str = "uz") -> str:
+        biz_str = str(biz_id or "")
+        if biz_str and self.stats_handler:
+            override = self.stats_handler._business_languages.get(biz_str)
+            if override:
+                return override
+        return (api_lang or "uz").lower()[:2]
+
     async def _check_planned_reminders(self):
         """
         Reja buyurtmalar uchun 60 daqiqa (1 soat) oldin eslatma yuborish VA QO'NG'IROQ QILISH.
@@ -490,46 +509,28 @@ class AutodialerPro:
     async def _planned_reminder_call(self, biz_id: str, order_count: int):
         """Reja eslatma uchun qo'ng'iroq (alohida task da ishlaydi - main loop bloklanmaydi)"""
         try:
-            seller_phone = None
-            seller_lang = "uz"  # Default til
-            businesses = await self.nonbor.get_businesses()
-            if businesses:
-                for b in businesses:
-                    if str(b.get("id")) == str(biz_id):
-                        seller_phone = b.get("phone_number", "")
-                        # Biznes egasi tilini olish
-                        raw_lang = (
-                            b.get("language") or
-                            b.get("owner_language") or
-                            b.get("tg_language") or
-                            b.get("language_code") or
-                            "uz"
-                        )
-                        seller_lang = str(raw_lang).lower()[:2]
-                        break
+            biz = next(
+                (b for b in (await self.nonbor.get_businesses() or []) if str(b.get("id")) == str(biz_id)),
+                None
+            )
+            if not biz:
+                logger.warning(f"Reja eslatma: biz #{biz_id} topilmadi")
+                return
 
+            seller_phone = self._format_phone(biz.get("phone_number", ""))
             if not seller_phone:
                 logger.warning(f"Reja eslatma: biz #{biz_id} telefon raqami topilmadi")
                 return
 
-            # Telefon raqamini formatlash
-            phone_digits = ''.join(filter(str.isdigit, seller_phone))
-            if len(phone_digits) == 9:
-                seller_phone = f"+998{phone_digits}"
-            elif len(phone_digits) == 12 and phone_digits.startswith("998"):
-                seller_phone = f"+{phone_digits}"
+            api_lang = biz.get("language") or biz.get("owner_language") or biz.get("tg_language") or "uz"
+            seller_lang = self._resolve_lang(biz_id, api_lang)
 
-            # Avtoqo'ng'iroq o'chirilganmi tekshirish
             biz_id_int = int(biz_id) if str(biz_id).isdigit() else None
             if biz_id_int and self.stats_handler and not self.stats_handler.is_call_enabled(biz_id_int):
-                logger.info(f"Reja eslatma: biz #{biz_id} avtoqo'ng'iroq O'CHIRILGAN - qo'ng'iroq qilinmaydi")
+                logger.info(f"Reja eslatma: biz #{biz_id} avtoqo'ng'iroq O'CHIRILGAN")
                 return
 
-            # TTS audio yaratish (tilga qarab - barcha tillar tts_service.py da)
-            audio_path = await self.tts.generate_planned_message(
-                count=order_count,
-                lang=seller_lang
-            )
+            audio_path = await self.tts.generate_planned_message(lang=seller_lang)
             if not audio_path:
                 logger.error(f"Reja eslatma: TTS audio yaratilmadi")
                 return
@@ -561,32 +562,12 @@ class AutodialerPro:
         if not biz:
             return {"success": False, "error": f"Biznes #{biz_id} topilmadi"}
 
-        # Telefon raqam
-        raw_phone = biz.get("phone_number") or biz.get("phone") or ""
-        if not raw_phone:
-            return {"success": False, "error": f"Biznes #{biz_id} telefon raqami yo'q"}
+        phone = self._format_phone(biz.get("phone_number") or biz.get("phone") or "")
+        if not phone:
+            return {"success": False, "error": f"Biznes #{biz_id} telefon raqami yo'q yoki noto'g'ri"}
 
-        digits = "".join(filter(str.isdigit, str(raw_phone)))
-        if len(digits) == 9:
-            phone = f"+998{digits}"
-        elif len(digits) == 12 and digits.startswith("998"):
-            phone = f"+{digits}"
-        elif digits:
-            phone = f"+{digits}"
-        else:
-            return {"success": False, "error": f"Biznes #{biz_id} telefon formati noto'g'ri: {raw_phone!r}"}
-
-        # Til: avval local override (Telegram botdan), keyin API
-        lang = "uz"
-        if self.stats_handler:
-            lang = self.stats_handler._business_languages.get(str(biz_id), "")
-        if not lang:
-            lang = (
-                biz.get("language") or biz.get("lang") or
-                biz.get("owner_language") or biz.get("tg_language") or
-                biz.get("language_code") or biz.get("locale") or "uz"
-            )
-        lang = str(lang).lower()[:2]
+        api_lang = biz.get("language") or biz.get("lang") or biz.get("owner_language") or "uz"
+        lang = self._resolve_lang(biz_id, api_lang)
 
         # TTS audio
         audio_path = await self.tts.generate_order_message(count=1, lang=lang)
@@ -617,13 +598,6 @@ class AutodialerPro:
                     sig, lambda: asyncio.create_task(self.stop())
                 )
 
-        # TTS oldindan yaratish (faqat Asterisk faol bo'lganda kerak)
-        if not self.skip_asterisk:
-            logger.info("TTS xabarlarini tayyorlash...")
-            await self.tts.pregenerate_messages(max_count=50)
-        else:
-            logger.info("TTS o'tkazib yuborildi (Asterisk o'chirilgan)")
-
         # AMI ulanish (faqat Asterisk faol bo'lganda)
         ami_connected = False
         if not self.skip_asterisk:
@@ -631,7 +605,6 @@ class AutodialerPro:
             ami_connected = await self.ami.connect()
             if not ami_connected:
                 logger.error("AMI ulanish muvaffaqiyatsiz!")
-                # AMI siz ham davom etish mumkin (faqat Telegram)
 
             # SIP registratsiya tekshirish
             if ami_connected:
@@ -658,9 +631,16 @@ class AutodialerPro:
         # Ishga tushganda sinxronizatsiya - Nonbor API va Telegram
         await self._sync_on_startup()
 
-        # HTTP API server ishga tushirish
+        # HTTP API server ishga tushirish (TTS dan oldin — tezroq ochilsin)
         logger.info("API server ishga tushirish...")
         await self.api_server.start()
+
+        # TTS oldindan yaratish fon rejimda (API ni bloklamaslik uchun)
+        if not self.skip_asterisk:
+            logger.info("TTS xabarlarini fon rejimda tayyorlash...")
+            asyncio.create_task(self.tts.pregenerate_messages(max_count=50))
+        else:
+            logger.info("TTS o'tkazib yuborildi (Asterisk o'chirilgan)")
 
         # Asosiy loop
         logger.info("=" * 60)
@@ -1691,33 +1671,11 @@ class AutodialerPro:
         for order_id in order_ids:
             try:
                 order_data = await self.nonbor.get_order_full_data(order_id)
-                # business_languages.json override (API tilini ustidan yozadi)
-                if self.stats_handler:
-                    biz_id = str(order_data.get("business_id", ""))
-                    local_lang = self.stats_handler._business_languages.get(biz_id)
-                    if local_lang:
-                        order_data["seller_language"] = local_lang
-                seller_phone = order_data.get("seller_phone", "Noma'lum")
-                seller_name = order_data.get("seller_name", "")
-                logger.info(f"Buyurtma #{order_id}: seller_name='{seller_name}', seller_phone='{seller_phone}', til='{order_data.get('seller_language','uz')}'")
-
-                # Telefon raqamini formatlash
-                if seller_phone and seller_phone != "Noma'lum":
-                    # Faqat raqamlarni olish
-                    phone_digits = ''.join(filter(str.isdigit, seller_phone))
-                    if len(phone_digits) >= 9:
-                        # +998 formatiga o'tkazish
-                        if len(phone_digits) == 9:
-                            seller_phone = f"+998{phone_digits}"
-                        elif len(phone_digits) == 12 and phone_digits.startswith("998"):
-                            seller_phone = f"+{phone_digits}"
-                        else:
-                            seller_phone = f"+{phone_digits}"
-                    else:
-                        seller_phone = None
-                else:
-                    # "Noma'lum" yoki bo'sh → None
-                    seller_phone = None
+                biz_id = order_data.get("business_id")
+                lang = self._resolve_lang(biz_id, order_data.get("seller_language", "uz"))
+                order_data["seller_language"] = lang
+                seller_phone = self._format_phone(order_data.get("seller_phone", ""))
+                logger.info(f"Buyurtma #{order_id}: biz_id={biz_id}, lang={lang!r}, phone={seller_phone}")
 
                 if not seller_phone:
                     logger.warning(f"Buyurtma #{order_id}: sotuvchi telefoni topilmadi, qo'ng'iroq o'tkazib yuborildi")

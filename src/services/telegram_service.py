@@ -969,21 +969,21 @@ class TelegramStatsHandler:
 
         # Guruhlar faylini yuklash
         self._groups_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "business_groups.json"
         )
         self._business_groups: Dict[str, str] = self._load_groups()
 
         # Biznes tillari (Telegram language_code dan avtomatik yoki manual)
         self._languages_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "business_languages.json"
         )
         self._business_languages: Dict[str, str] = self._load_business_languages()
 
         # Avtoqo'ng'iroq sozlamalari
         self._call_settings_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "call_settings.json"
         )
         self._disabled_businesses: set = self._load_call_settings()
@@ -995,7 +995,7 @@ class TelegramStatsHandler:
         self._verified_users: Dict[str, dict] = {}      # chat_id -> {phone, business_id, business_title}
         self._phone_to_chat: Dict[str, str] = {}        # phone -> chat_id
         self._auth_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "auth_users.json"
         )
         self._load_auth_users()
@@ -1011,13 +1011,13 @@ class TelegramStatsHandler:
 
         # Xabarnomalar tizimi
         self._notif_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "scheduled_notifications.json"
         )
         self._notifications: List[dict] = self._load_notifications()
         # Xabarnoma yaratish state (har bir admin chat uchun)
         self._notif_draft_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "notif_drafts.json"
         )
         self._notif_draft: Dict[str, dict] = self._load_notif_drafts()
