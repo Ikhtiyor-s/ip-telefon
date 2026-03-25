@@ -461,9 +461,12 @@ class NonborService:
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             result["client_name"] = f"{first_name} {last_name}".strip() or "Noma'lum"
-            # MUHIM: seller_language bu yerda O'ZGARTIRILMAYDI!
-            # user.lang — bu buyurtmachi (mijoz) tili, sotuvchi tili emas.
-            # Sotuvchi tili yuqorida matched_biz.language dan o'rnatilgan.
+            # user.lang — sotuvchi (biznes egasi) tili
+            # get-order-for-courier/ endpointida user = sotuvchi, delivery = yetkazib berish ma'lumotlari
+            user_lang = (user.get("lang") or "").lower()[:2]
+            if user_lang and result.get("seller_language", "uz") == "uz":
+                result["seller_language"] = user_lang
+                logger.info(f"Buyurtma #{order_id}: seller_language user.lang dan: {user_lang!r}")
 
         # Mijoz telefon raqami - bir nechta joydan qidirish
         client_phone = (
