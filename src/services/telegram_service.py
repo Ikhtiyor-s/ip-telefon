@@ -1548,6 +1548,9 @@ class TelegramStatsHandler:
                 self._business_groups[str(biz_id)] = group_id
                 self._save_groups()
                 logger.info(f"Biznes #{biz_id} uchun guruh ID saqlandi: {group_id}")
+                # Nonbor admin panelga ham yuborish
+                if self.nonbor:
+                    asyncio.create_task(self.nonbor.update_business_group(biz_id, group_id))
                 if msg_id:
                     if self._is_admin(chat_id):
                         await self._show_business_detail(msg_id, chat_id, biz_id)

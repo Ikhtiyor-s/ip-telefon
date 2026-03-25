@@ -600,6 +600,23 @@ class NonborService:
         logger.info(f"Biznes #{business_id} buyurtmalari: {len(business_orders)} ta (jami: {len(orders)})")
         return business_orders
 
+    async def update_business_group(self, biz_id: int, group_id: str) -> bool:
+        """Biznes guruh ID sini Nonbor backendga yuborish (admin panel ko'rsin)"""
+        session = await self._get_session()
+        url = f"{NONBOR_DOMAIN}/api/business-groups/{biz_id}"
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with session.put(url, json={"group_id": group_id}, timeout=timeout) as resp:
+                if resp.status in (200, 201):
+                    logger.info(f"Nonbor: biznes #{biz_id} guruh yangilandi -> {group_id}")
+                    return True
+                else:
+                    logger.warning(f"Nonbor business-groups xatosi: {resp.status}")
+                    return False
+        except Exception as e:
+            logger.warning(f"Nonbor business-groups ulanish xatosi: {e}")
+            return False
+
     def reset_known_leads(self):
         """Ko'rilgan buyurtmalar ro'yxatini tozalash"""
         self._known_leads.clear()
