@@ -273,6 +273,34 @@ class NonborService:
             logger.error(f"check_for_new_leads xatosi: {e}")
             return None, None
 
+    def _match_business_by_title(self, biz_title: str, biz_address: str = "") -> Optional[Dict]:
+        """
+        Cache dan biznesni title bo'yicha topish.
+        Bir xil nomli bizneslar bo'lsa, address bo'yicha aniqlashtirish.
+        """
+        candidates = []
+        for cached_biz in self._businesses_cache.values():
+            if cached_biz.get("title", "").strip().lower() == biz_title:
+                candidates.append(cached_biz)
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        if len(candidates) > 1 and biz_address:
+            # Bir xil nomli bizneslar bor — address bo'yicha aniqlash
+            for c in candidates:
+                cached_addr = (c.get("address") or "").strip().lower()
+                if cached_addr and cached_addr == biz_address:
+                    return c
+            # Address to'g'ri kelmadi — birinchisini qaytarish (yaxshi variant yo'q)
+            logger.warning(f"Bir xil nomli {len(candidates)} ta biznes topildi: '{biz_title}', address mos kelmadi")
+            return candidates[0]
+
+        if len(candidates) > 1:
+            return candidates[0]
+
+        return None
+
     async def get_order_full_data(self, order_id: int) -> Dict:
         """
         Buyurtma uchun to'liq ma'lumotlarni olish
@@ -335,31 +363,50 @@ class NonborService:
             result["seller_name"] = business.get("title", "Noma'lum")
             result["seller_address"] = business.get("address", "Noma'lum")
 
-            # Biznes telefon raqami va tilini olish (businesses API dan, ID bo'yicha)
+            # Biznes telefon raqami va tilini olish (businesses API dan, ID yoki title bo'yicha)
             biz_id = business.get("id")
+            matched_biz = None
+
             if biz_id:
-                # Avval cacheda izlash, topilmasa cacheni yangilab qayta izlash
+                # ID bo'yicha cacheda izlash
                 matched_biz = self._businesses_cache.get(biz_id)
                 if not matched_biz:
                     logger.info(f"Biznes #{biz_id} cacheda topilmadi, cacheni yangilash...")
                     await self.get_businesses()
                     matched_biz = self._businesses_cache.get(biz_id)
 
+            # ID yo'q yoki topilmadi — title + address bo'yicha izlash
+            # (get-order-for-courier da id kelmasligi mumkin, faqat title/address/lat/long keladi)
+            if not matched_biz and business.get("title"):
+                biz_title = business["title"].strip().lower()
+                biz_address = (business.get("address") or "").strip().lower()
+                if not self._businesses_cache:
+                    await self.get_businesses()
+                matched_biz = self._match_business_by_title(biz_title, biz_address)
+                if not matched_biz:
+                    # Cache da yo'q — yangilab qayta izlash
+                    await self.get_businesses()
+                    matched_biz = self._match_business_by_title(biz_title, biz_address)
+
                 if matched_biz:
-                    phone = matched_biz.get("phone_number", "")
-                    if phone:
-                        result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
-                    # Biznes egasi tili (ilovada tanlangan)
-                    lang = (
-                        matched_biz.get("language") or
-                        matched_biz.get("owner_language") or
-                        matched_biz.get("tg_language") or
-                        matched_biz.get("language_code") or
-                        "uz"
-                    )
-                    result["seller_language"] = str(lang).lower()[:2]
+                    result["business_id"] = matched_biz.get("id")
+                    logger.info(f"Biznes title bo'yicha topildi: '{business['title']}' -> ID={matched_biz.get('id')}")
                 else:
-                    logger.warning(f"Biznes #{biz_id} ('{business.get('title')}') businesses API da topilmadi (cache: {len(self._businesses_cache)} ta)")
+                    logger.warning(f"Biznes '{business.get('title')}' title bo'yicha ham topilmadi (cache: {len(self._businesses_cache)} ta)")
+
+            if matched_biz:
+                phone = matched_biz.get("phone_number", "")
+                if phone:
+                    result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
+                # Biznes egasi tili (ilovada tanlangan)
+                lang = (
+                    matched_biz.get("language") or
+                    matched_biz.get("owner_language") or
+                    matched_biz.get("tg_language") or
+                    matched_biz.get("language_code") or
+                    "uz"
+                )
+                result["seller_language"] = str(lang).lower()[:2]
 
         # Mijoz ma'lumotlari
         user = order.get("user") or {}

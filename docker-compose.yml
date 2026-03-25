@@ -7,7 +7,7 @@ services:
   # ASTERISK PBX
   # ===========================================================================
   asterisk:
-    image: andrius/asterisk:alpine-18
+    image: andrius/asterisk:alpine-latest
     container_name: autodialer-asterisk
     restart: unless-stopped
     network_mode: host
