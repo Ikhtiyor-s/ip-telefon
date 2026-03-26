@@ -577,6 +577,7 @@ class AutodialerAPI:
             "ami_host": os.getenv("AMI_HOST", "127.0.0.1"),
             "ami_port": int(os.getenv("AMI_PORT", "5038")),
             "planned_reminder_time": ad.planned_reminder_time,
+            "planned_telegram_time": ad.planned_telegram_time,
         })
 
     async def update_config(self, request):
@@ -594,6 +595,7 @@ class AutodialerAPI:
             ("wait_before_call",     "wait_before_call",     "WAIT_BEFORE_CALL",     None),
             ("telegram_alert_time",  "telegram_alert_time",  "TELEGRAM_ALERT_TIME",  None),
             ("planned_reminder_time","planned_reminder_time","PLANNED_REMINDER_TIME", None),
+            ("planned_telegram_time","planned_telegram_time","PLANNED_TELEGRAM_TIME", None),
             ("max_call_attempts",    "max_call_attempts",    "MAX_CALL_ATTEMPTS",
                 lambda v: setattr(ad.call_manager, "max_attempts", v)),
             ("retry_interval",       "retry_interval",       "RETRY_INTERVAL",

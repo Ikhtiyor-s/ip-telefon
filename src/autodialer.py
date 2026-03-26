@@ -208,7 +208,8 @@ class AutodialerPro:
         telegram_alert_time: int = 180,  # 3 daqiqa
         max_call_attempts: int = 2,
         retry_interval: int = 30,  # 30 soniya (birinchi qo'ng'iroqdan keyin)
-        planned_reminder_time: int = 60,  # Reja buyurtma eslatma vaqti (daqiqa)
+        planned_reminder_time: int = 60,  # Reja buyurtma qo'ng'iroq vaqti (daqiqa)
+        planned_telegram_time: int = 120,  # Reja buyurtma Telegram xabari vaqti (daqiqa)
         # Yo'llar
         audio_dir: str = "audio",
         # Platform
@@ -221,6 +222,7 @@ class AutodialerPro:
         self.max_call_attempts = max_call_attempts
         self.retry_interval = retry_interval
         self.planned_reminder_time = planned_reminder_time
+        self.planned_telegram_time = planned_telegram_time
         self.audio_dir = Path(audio_dir)
         self.skip_asterisk = skip_asterisk
 
@@ -257,8 +259,9 @@ class AutodialerPro:
         # Noto'g'ri guruh ID lar - "chat not found" xatosi kelgan, qayta urinmaslik
         self._invalid_group_ids: set = set()
 
-        # Reja buyurtmalar uchun 20 daqiqa oldin eslatma yuborilgan buyurtmalar
-        self._planned_reminders_sent: set = set()
+        # Reja buyurtmalar uchun eslatma yuborilgan buyurtmalar
+        self._planned_reminders_sent: set = set()   # qo'ng'iroq yuborilganlar
+        self._planned_telegram_sent: set = set()    # Telegram xabari yuborilganlar
 
         # Qo'ng'iroq urinishlari soni - HAR BIR SOTUVCHI UCHUN ALOHIDA
         # {seller_phone: call_attempts}
@@ -406,16 +409,17 @@ class AutodialerPro:
 
     async def _check_planned_reminders(self):
         """
-        Reja buyurtmalar uchun 60 daqiqa (1 soat) oldin eslatma yuborish VA QO'NG'IROQ QILISH.
-        Qabul qilingan (ACCEPTED/READY) reja buyurtmalarning vaqti yaqinlashganda
-        biznes guruhiga eslatma xabar yuboriladi va sotuvchiga qo'ng'iroq qilinadi.
+        Reja buyurtmalar uchun eslatma yuborish VA QO'NG'IROQ QILISH.
+        - planned_telegram_time daqiqa oldin: Telegram guruh xabari
+        - planned_reminder_time daqiqa oldin: Qo'ng'iroq
         """
         try:
             now = datetime.now(timezone(timedelta(hours=5)))  # UZ vaqt zonasi
 
-            # Biznes bo'yicha reja buyurtmalarni yig'ish
-            # {biz_id: {"chat_id": str, "orders": [...], "biz_title": str}}
-            biz_planned: Dict[str, dict] = {}
+            # Telegram va qo'ng'iroq uchun alohida to'plamlar
+            # {biz_id: {"chat_id", "orders", "biz_title"}}
+            biz_telegram: Dict[str, dict] = {}   # Telegram yuborish kerak
+            biz_call: Dict[str, dict] = {}        # Qo'ng'iroq qilish kerak
 
             for order_id, tracked in self._group_order_messages.items():
                 order_data = tracked.get("order_data", {})
@@ -431,11 +435,6 @@ class AutodialerPro:
                               "COMPLETED", "DELIVERED", "PAYMENT_EXPIRED"):
                     continue
 
-                # Allaqachon eslatma yuborilgan
-                if order_id in self._planned_reminders_sent:
-                    continue
-
-                # planned_datetime_raw ni tekshirish
                 raw_dt = order_data.get("planned_datetime_raw", "")
                 if not raw_dt:
                     continue
@@ -443,38 +442,46 @@ class AutodialerPro:
                 try:
                     planned_dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00'))
                     minutes_left = (planned_dt - now).total_seconds() / 60
+                    biz_id = tracked.get("biz_id", "")
+                    chat_id = tracked.get("chat_id", "")
+                    if not (chat_id and biz_id):
+                        continue
 
-                    # planned_reminder_time daqiqa oldin eslatma
-                    if 0 <= minutes_left <= self.planned_reminder_time:
-                        biz_id = tracked.get("biz_id", "")
-                        chat_id = tracked.get("chat_id", "")
-                        if chat_id and biz_id:
-                            if biz_id not in biz_planned:
-                                biz_planned[biz_id] = {
-                                    "chat_id": chat_id,
-                                    "orders": [],
-                                    "biz_title": order_data.get("seller_name", ""),
-                                }
-                            biz_planned[biz_id]["orders"].append({
-                                "order_id": order_id,
-                                "order_number": order_data.get("order_number", ""),
-                                "delivery_time": order_data.get("delivery_time", ""),
-                                "product_name": order_data.get("product_name", ""),
-                            })
+                    order_entry = {
+                        "order_id": order_id,
+                        "order_number": order_data.get("order_number", ""),
+                        "delivery_time": order_data.get("delivery_time", ""),
+                        "product_name": order_data.get("product_name", ""),
+                    }
+
+                    # Telegram: planned_telegram_time daqiqa oldin
+                    if (0 <= minutes_left <= self.planned_telegram_time
+                            and order_id not in self._planned_telegram_sent):
+                        if biz_id not in biz_telegram:
+                            biz_telegram[biz_id] = {"chat_id": chat_id, "orders": [],
+                                                     "biz_title": order_data.get("seller_name", "")}
+                        biz_telegram[biz_id]["orders"].append(order_entry)
+
+                    # Qo'ng'iroq: planned_reminder_time daqiqa oldin
+                    if (0 <= minutes_left <= self.planned_reminder_time
+                            and order_id not in self._planned_reminders_sent):
+                        if biz_id not in biz_call:
+                            biz_call[biz_id] = {"chat_id": chat_id, "orders": [],
+                                                 "biz_title": order_data.get("seller_name", "")}
+                        biz_call[biz_id]["orders"].append(order_entry)
+
                 except Exception:
                     continue
 
-            # Har bir biznesga eslatma yuborish + qo'ng'iroq qilish
-            for biz_id, biz_data in biz_planned.items():
+            # 1. TELEGRAM XABAR yuborish
+            for biz_id, biz_data in biz_telegram.items():
                 chat_id = biz_data["chat_id"]
                 orders = biz_data["orders"]
                 count = len(orders)
 
-                # 1. TELEGRAM XABAR yuborish (guruhga)
                 text = f"⏰ <b>ESLATMA: {count} ta reja buyurtma!</b>\n"
                 text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 text += f"Sizda <b>{count}</b> ta reja bo'yicha buyurtmalaringiz bor:\n\n"
-
                 for i, o in enumerate(orders, 1):
                     text += f"  {i}. Buyurtma #{o['order_number']}"
                     if o['delivery_time']:
@@ -482,23 +489,26 @@ class AutodialerPro:
                     if o['product_name']:
                         text += f"\n     🏷 {o['product_name']}"
                     text += "\n"
-
-                text += f"\n❗❗❗ {self.planned_reminder_time} daqiqa qoldi! Tayyorlashni boshlang!"
+                text += f"\n❗❗❗ {self.planned_telegram_time} daqiqa qoldi! Tayyorlashni boshlang!"
 
                 try:
-                    await self.telegram.send_message(
-                        text=text, chat_id=chat_id, parse_mode="HTML"
-                    )
-                    logger.info(f"Reja eslatma yuborildi: chat={chat_id}, {count} ta buyurtma")
+                    await self.telegram.send_message(text=text, chat_id=chat_id, parse_mode="HTML")
+                    logger.info(f"Reja Telegram eslatma yuborildi: chat={chat_id}, {count} ta buyurtma")
                 except Exception as e:
-                    logger.error(f"Reja eslatma xatosi: {e}")
+                    logger.error(f"Reja Telegram eslatma xatosi: {e}")
 
-                # 2. QO'NG'IROQ QILISH (agar Asterisk faol bo'lsa)
-                # MUHIM: Alohida task da ishga tushirish (main loop bloklanmasin)
+                for o in orders:
+                    self._planned_telegram_sent.add(o["order_id"])
+
+            # 2. QO'NG'IROQ QILISH
+            for biz_id, biz_data in biz_call.items():
+                orders = biz_data["orders"]
+                count = len(orders)
+
                 if not self.skip_asterisk:
                     asyncio.create_task(self._planned_reminder_call(biz_id, count))
+                    logger.info(f"Reja qo'ng'iroq boshlandi: biz={biz_id}, {count} ta buyurtma")
 
-                # Eslatma yuborildi - barcha buyurtmalarni belgilash
                 for o in orders:
                     self._planned_reminders_sent.add(o["order_id"])
                 self._save_planned_reminders()
@@ -2279,6 +2289,7 @@ async def main():
         max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
         retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
         planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
+        planned_telegram_time=int(os.getenv("PLANNED_TELEGRAM_TIME", "120")),
 
         # Platform
         skip_asterisk=skip_asterisk,
