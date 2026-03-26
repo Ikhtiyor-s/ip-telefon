@@ -410,7 +410,7 @@ class AutodialerPro:
     async def _check_planned_reminders(self):
         """
         Reja buyurtmalar uchun eslatma yuborish VA QO'NG'IROQ QILISH.
-        - planned_telegram_time daqiqa oldin: Telegram guruh xabari
+        - planned_group_alert_time daqiqa oldin: Telegram guruh xabari
         - planned_reminder_time daqiqa oldin: Qo'ng'iroq
         """
         try:
@@ -2295,7 +2295,7 @@ async def main():
         max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
         retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
         planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
-        planned_telegram_time=int(os.getenv("PLANNED_TELEGRAM_TIME", "120")),
+        planned_group_alert_time=int(os.getenv("PLANNED_GROUP_ALERT_TIME", "60")),
 
         # Platform
         skip_asterisk=skip_asterisk,

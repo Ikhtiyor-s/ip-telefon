@@ -48,7 +48,7 @@ ORDER_MESSAGES = {
 # Reja (scheduled) eslatma xabarlari: faqat 1 ta xabar har bir til uchun
 PLANNED_MESSAGES = {
     "uz": "Assalomu alaykum! Bu Nonbor xizmati. Sizda rejalashtirilgan buyurtma bor. Buyurtmangizni tayyorlang.",
-    "ru": "Здравствуйте! Звонит сервис Нонбо́р. У вас запланированный заказ. Пожалуйста, подготовьте ваш заказ.",
+    "ru": "Здравствуйте! Звонит сервис Нонбор. У вас запланированный заказ. Пожалуйста, подготовьте ваш заказ.",
     "en": "Hello! This is Nonbor calling. You have a scheduled order. Please prepare your order.",
     "zh": "您好！Nonbor来电提醒。您有一个计划订单，请准备好您的订单。",
 }
