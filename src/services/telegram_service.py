@@ -482,7 +482,9 @@ SOTUVCHI:
 
 ❌ Buyurtmalarni qabul qilmayapti!
 {call_note}
-🔴 Zudlik bilan bog'laning!"""
+🔴 Zudlik bilan bog'laning!
+
+📱 <a href="https://welltech.amocrm.ru">Buyurtmalarni ko'rish</a>"""
 
         return text
 
@@ -669,7 +671,9 @@ SOTUVCHI:
 
 ❌ Buyurtmalarni qabul qilmayapti!
 📞 {call_attempts} marta qo'ng'iroq qilindi.
-🔴 Zudlik bilan bog'laning!"""
+🔴 Zudlik bilan bog'laning!
+
+📱 <a href="https://welltech.amocrm.ru">Buyurtmalarni ko'rish</a>"""
 
         return text
 
@@ -742,10 +746,22 @@ SOTUVCHI:
 ⚠️ Iltimos, tezroq tekshiring!
         """
 
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "📱 amoCRM ochish",
+                        "url": "https://welltech.amocrm.ru"
+                    }
+                ]
+            ]
+        }
+
         return await self.edit_message(
             message_id=message_id,
             text=text,
-            chat_id=chat_id
+            chat_id=chat_id,
+            reply_markup=reply_markup
         )
 
 
