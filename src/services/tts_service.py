@@ -38,26 +38,11 @@ DEFAULT_LANG = "uz"
 # {count} joy egasi - songa almashtiriladi
 # Tabiiy operator uslubi — "bot" so'zi ishlatilmaydi
 ORDER_MESSAGES = {
-    "uz": (
-        "Assalomu alaykum! Bu Nonbor xizmati. Sizda yangi buyurtma keldi, iltimos ilovani tekshiring.",
-        "Assalomu alaykum! Bu Nonbor xizmati. Sizda {count} ta yangi buyurtma keldi, iltimos ilovani tekshiring.",
-    ),
-    "ru": (
-        "Здравствуйте! Звонит сервис Нонбо́р. У вас новый заказ, пожалуйста проверьте приложение.",
-        "Здравствуйте! Звонит сервис Нонбо́р. У вас {count} новых заказа, пожалуйста проверьте приложение.",
-    ),
-    "en": (
-        "Hello! This is Nonbor calling. You have a new order, please check your app.",
-        "Hello! This is Nonbor calling. You have {count} new orders, please check your app.",
-    ),
-    "zh": (
-        "您好！Nonbor来电通知。您有一个新订单，请查看您的应用。",
-        "您好！Nonbor来电通知。您有{count}个新订单，请查看您的应用。",
-    ),
-    "kk": (
-        "Сәлеметсіз бе! Nonbor хабарлайды. Сізде жаңа тапсырыс бар, қолданбаны тексеріңіз.",
-        "Сәлеметсіз бе! Nonbor хабарлайды. Сізде {count} жаңа тапсырыс бар, қолданбаны тексеріңіз.",
-    ),
+    "uz": "Assalomu alaykum! Bu Nonbor xizmati. Sizda {count} ta yangi buyurtma keldi, iltimos ilovani tekshiring.",
+    "ru": "Здравствуйте! Звонит сервис Нонбор. У вас {count} новых заказа, пожалуйста проверьте приложение.",
+    "en": "Hello! This is Nonbor calling. You have {count} new orders, please check your app.",
+    "zh": "您好！Nonbor来电通知。您有{count}个新订单，请查看您的应用。",
+    "kk": "Сәлеметсіз бе! Nonbor хабарлайды. Сізде {count} жаңа тапсырыс бар, қолданбаны тексеріңіз.",
 }
 
 # Reja (scheduled) eslatma xabarlari: faqat 1 ta xabar har bir til uchun
@@ -72,17 +57,11 @@ PLANNED_MESSAGES = {
 PRIMARY_LANGS = ["uz", "ru", "en", "zh"]
 
 
-def _get_message(messages_dict: dict, count: int, lang: str) -> str:
-    """Til va songa qarab xabar matnini qaytarish"""
-    lang = (lang or DEFAULT_LANG).lower()
-    templates = messages_dict.get(lang) or messages_dict.get(DEFAULT_LANG)
-    single, plural = templates
-    return single if count == 1 else plural.format(count=count)
-
-
 def _order_message_text(count: int, lang: str) -> str:
     """Yangi buyurtma xabari matni"""
-    return _get_message(ORDER_MESSAGES, count, lang)
+    lang = (lang or DEFAULT_LANG).lower()
+    template = ORDER_MESSAGES.get(lang) or ORDER_MESSAGES[DEFAULT_LANG]
+    return template.format(count=count)
 
 
 def _planned_message_text(lang: str) -> str:

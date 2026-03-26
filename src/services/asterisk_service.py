@@ -499,18 +499,47 @@ class CallManager:
         self.ami.on_event("DialEnd", self._on_dial_end)
 
     async def _on_originate_response(self, data: dict):
-        """Originate natijasi"""
+        """Originate natijasi - qo'ng'iroq yakunlandi"""
         response = data.get("Response", "")
         reason = data.get("Reason", "")
+        channel = data.get("Channel", "")
 
-        logger.debug(f"OriginateResponse: {response}, Reason: {reason}")
+        logger.info(f"OriginateResponse: response={response}, reason={reason}, channel={channel}")
 
-        if response == "Failure":
-            self._last_call_result = CallResult(
-                status=CallStatus.FAILED,
-                error=reason
-            )
-            self._call_completed_event.set()
+        # Natijani aniqlash: autodialer-dynamic Dial() ishlatmaydi,
+        # shuning uchun DialEnd emas — OriginateResponse qo'ng'iroq natijasi
+        if response == "Success":
+            result = CallResult(status=CallStatus.ANSWERED, dial_status="ANSWER")
+        else:
+            result = CallResult(status=CallStatus.FAILED, error=reason, dial_status="NOANSWER")
+
+        # Channel dan telefon raqamini olish: PJSIP/998xxxxxxxxx-... yoki PJSIP/998xxxxxxxxx@...
+        phone_match = None
+        if channel:
+            match = re.search(r'PJSIP/(\d+)', channel)
+            if match:
+                phone_match = match.group(1)
+
+        # Parallel qo'ng'iroq uchun signal
+        if phone_match and phone_match in self._active_calls:
+            call_data = self._active_calls[phone_match]
+            if not call_data["event"].is_set():
+                call_data["result"] = result
+                call_data["event"].set()
+                logger.info(f"OriginateResponse (parallel): {phone_match} -> {response}")
+        elif self._active_calls:
+            # Fallback: channel noma'lum bo'lsa birinchi kutayotgan callga signal
+            for number, call_data in self._active_calls.items():
+                if not call_data["event"].is_set():
+                    call_data["result"] = result
+                    call_data["event"].set()
+                    logger.info(f"OriginateResponse fallback: {number} -> {response}")
+                    break
+        else:
+            # Sequential mode
+            self._last_call_result = result
+            if self._call_in_progress:
+                self._call_completed_event.set()
 
     async def _on_hangup(self, data: dict):
         """Qo'ng'iroq tugatildi"""

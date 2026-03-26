@@ -1055,6 +1055,12 @@ class AutodialerPro:
 
                 group_chat_id = self.stats_handler._business_groups[biz_id]
 
+                # Support (default) guruhga yangi buyurtma xabarlari yuborilmaydi
+                # U faqat 180s+ qabul qilinmagan buyurtmalar uchun alert oladi
+                if self.telegram and str(group_chat_id) == str(self.telegram.default_chat_id):
+                    logger.debug(f"Buyurtma #{order_id}: support guruhga ({group_chat_id}) yangi buyurtma xabari yuborilmaydi")
+                    continue
+
                 # Noto'g'ri guruh ID - qayta urinmaymiz
                 if group_chat_id in self._invalid_group_ids:
                     logger.debug(f"Buyurtma #{order_id}: guruh {group_chat_id} noto'g'ri (invalid), o'tkazib yuborildi")
@@ -1833,9 +1839,9 @@ class AutodialerPro:
                     order_ids=order_ids
                 )
             else:
-                # JAVOB BERMADI — keyingi siklda 1 urinish bilan qayta qo'ng'iroq
+                # JAVOB BERMADI — keyingi siklda barcha CHECKING buyurtmalar bilan qayta qo'ng'iroq
                 self.state.unanswered_sellers.add(seller_phone)
-                logger.warning(f"[X] Qo'ng'iroq javobsiz: {seller_name} ({seller_phone}) - keyingi siklda qayta qo'ng'iroq (1 urinish)")
+                logger.warning(f"[X] Qo'ng'iroq javobsiz: {seller_name} ({seller_phone}) - keyingi siklda qayta qo'ng'iroq")
                 self.stats.record_call(
                     phone=seller_phone,
                     seller_name=seller_name,
