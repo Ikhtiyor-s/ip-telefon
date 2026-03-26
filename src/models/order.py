@@ -31,32 +31,6 @@ class Order:
     price: float = 0.0
     notes: str = ""
 
-    @classmethod
-    def from_amocrm(cls, lead_data: dict) -> "Order":
-        """amoCRM lead ma'lumotlaridan Order yaratish"""
-        return cls(
-            id=lead_data.get("id"),
-            lead_id=lead_data.get("id"),
-            status=OrderStatus.TEKSHIRILMOQDA,
-            customer_name=lead_data.get("name", "Noma'lum"),
-            customer_phone=cls._extract_phone(lead_data),
-            created_at=datetime.fromtimestamp(lead_data.get("created_at", 0)),
-            updated_at=datetime.fromtimestamp(lead_data.get("updated_at", 0)),
-            responsible_user_id=lead_data.get("responsible_user_id"),
-            price=lead_data.get("price", 0),
-        )
-
-    @staticmethod
-    def _extract_phone(lead_data: dict) -> str:
-        """Lead dan telefon raqamini olish"""
-        custom_fields = lead_data.get("custom_fields_values", [])
-        if custom_fields:
-            for field in custom_fields:
-                if field.get("field_code") == "PHONE":
-                    values = field.get("values", [])
-                    if values:
-                        return values[0].get("value", "")
-        return ""
 
 
 @dataclass
