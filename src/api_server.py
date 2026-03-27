@@ -38,23 +38,47 @@ class AutodialerAPI:
     def __init__(self, autodialer=None, port: int = 8585):
         self.autodialer = autodialer
         self.port = port
-        self.app = web.Application(middlewares=[self._cors_middleware])
+        self.api_key = os.getenv("API_SECRET_KEY", "autodialer-api-secret-2024-nonbor")
+        _cors_origins = [
+            o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost,http://localhost:80").split(",")
+        ]
+        self._cors_origins = set(_cors_origins)
+        self.app = web.Application(middlewares=[self._auth_cors_middleware])
         self._setup_routes()
         self._runner = None
 
     @web.middleware
-    async def _cors_middleware(self, request, handler):
-        """CORS middleware — admin panel uchun"""
+    async def _auth_cors_middleware(self, request, handler):
+        """CORS + API Key auth middleware"""
+        origin = request.headers.get("Origin", "")
+        allowed_origin = origin if origin in self._cors_origins else ""
+
         if request.method == "OPTIONS":
             resp = web.Response()
         else:
-            try:
-                resp = await handler(request)
-            except web.HTTPException as ex:
-                resp = ex
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+            # Health endpoint — ochiq
+            if request.path == "/api/autodialer/health":
+                try:
+                    resp = await handler(request)
+                except web.HTTPException as ex:
+                    resp = ex
+            else:
+                # API key tekshirish
+                api_key = request.headers.get("X-API-Key") or request.query.get("api_key", "")
+                if api_key != self.api_key:
+                    resp = web.json_response(
+                        {"success": False, "message": "API kalit noto'g'ri yoki berilmagan"},
+                        status=401
+                    )
+                else:
+                    try:
+                        resp = await handler(request)
+                    except web.HTTPException as ex:
+                        resp = ex
+
+        resp.headers["Access-Control-Allow-Origin"] = allowed_origin or ""
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-API-Key"
         return resp
 
     def _setup_routes(self):
