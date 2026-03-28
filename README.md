@@ -1,542 +1,305 @@
-# AutoDialer Pro - amoCRM + Asterisk + Telegram
+# Autodialer Pro
 
-Yangi buyurtmalar uchun avtomatik qo'ng'iroq qiluvchi tizim.
+Nonbor oshxona buyurtma tizimi uchun avtomatik qo'ng'iroq va Telegram xabar yuborish servisi.
 
-## Tizim haqida
+## Arxitektura
 
-AutoDialer Pro quyidagi vazifalarni bajaradi:
-1. amoCRM dan yangi buyurtmalarni kuzatadi
-2. Yangi buyurtma kelganda 90 soniya kutadi
-3. Sotuvchiga avtomatik qo'ng'iroq qiladi (ovozli xabar bilan)
-4. Agar javob bermasa, qayta qo'ng'iroq qiladi
-5. 3 daqiqadan keyin Telegram guruhga xabar yuboradi
-6. Buyurtma holati o'zgarganda Telegram xabarini o'chiradi
-
----
-
-## Tizim talablari
-
-### Dasturiy ta'minot
-- Windows 10/11
-- WSL2 (Windows Subsystem for Linux)
-- Ubuntu 22.04 (WSL ichida)
-- Python 3.10+
-- Asterisk 18+ (WSL ichida)
-
-### Hisoblar
-- amoCRM hisobi (admin huquqlari bilan)
-- Telegram hisobi (bot yaratish uchun)
-- Sarkor Telecom SIP hisobi
-
----
-
-## 1-BOSQICH: Kerakli ma'lumotlarni olish
-
-### 1.1 amoCRM API Token olish
-
-1. amoCRM ga kiring: `https://SIZNING_SUBDOMAIN.amocrm.ru`
-
-2. **Sozlamalar** > **Integratsiyalar** bo'limiga o'ting
-
-3. **"O'z integratsiyangizni yarating"** tugmasini bosing
-
-4. Integratsiya ma'lumotlarini kiriting:
-   - Nomi: `AutoDialer`
-   - Tavsif: `Avtomatik qo'ng'iroq tizimi`
-
-5. **Ruxsatlar**ni tanlang:
-   - [x] crm
-   - [x] notifications
-
-6. **Saqlash** tugmasini bosing
-
-7. **Tokenlar** bo'limidan quyidagilarni nusxalang:
-   - `Access Token` - bu sizning `AMOCRM_TOKEN`
-   - Subdomain - bu sizning `AMOCRM_SUBDOMAIN` (masalan: `welltech`)
-
-**Muhim:** Token 24 soatda eskiradi. Refresh token yordamida yangilanadi.
-
----
-
-### 1.2 Telegram Bot yaratish
-
-#### Bot yaratish:
-
-1. Telegram da `@BotFather` ga yozing
-
-2. `/newbot` buyrug'ini yuboring
-
-3. Bot nomini kiriting: `AutoDialer Bot`
-
-4. Bot username kiriting: `autodialer_welltech_bot` (unique bo'lishi kerak)
-
-5. BotFather sizga **token** beradi:
-   ```
-   7683981246:AAFCH2u26L1ohHEOddFY8I26o4k_uXptb08
-   ```
-   Bu sizning `TELEGRAM_BOT_TOKEN`
-
-#### Guruh Chat ID olish:
-
-1. Telegram da yangi guruh yarating yoki mavjud guruhni oching
-
-2. Botni guruhga qo'shing (guruh sozlamalaridan)
-
-3. Guruhga biror xabar yozing
-
-4. Brauzerda quyidagi URL ni oching:
-   ```
-   https://api.telegram.org/bot<TOKEN>/getUpdates
-   ```
-   `<TOKEN>` o'rniga bot tokeningizni qo'ying
-
-5. JSON javobdan `chat.id` ni toping:
-   ```json
-   "chat": {
-     "id": -5219407458,
-     "title": "WellTech Orders"
-   }
-   ```
-   `-5219407458` - bu sizning `TELEGRAM_CHAT_ID`
-
-**Eslatma:** Guruh ID har doim `-` belgisi bilan boshlanadi.
-
----
-
-### 1.3 Sarkor Telecom SIP ma'lumotlari
-
-Sarkor Telecom bilan shartnoma tuzganingizda quyidagi ma'lumotlarni olasiz:
-
-| Parametr | Qiymat (misol) |
-|----------|----------------|
-| SIP server | `sip.sarkor.uz` |
-| Port | `5060` |
-| Username | `998783337984` |
-| Password | `SizningParol123` |
-| CallerID | `+998783337984` |
-
-Bu ma'lumotlarni Asterisk PJSIP konfiguratsiyasida ishlatiladi.
-
----
-
-## 2-BOSQICH: WSL va Asterisk o'rnatish
-
-### 2.1 WSL2 o'rnatish
-
-PowerShell da (Administrator):
-```powershell
-wsl --install -d Ubuntu-22.04
+```
+                    +-------------------+
+                    |   Nonbor API      |
+                    | (buyurtmalar)     |
+                    +--------+----------+
+                             |
+                    +--------v----------+
+                    |  Autodialer Pro   |
+                    |  (Python 3.11)    |
+                    |                   |
+                    | - Polling         |
+                    | - TTS (Edge)      |
+                    | - Call logic      |
+                    | - REST API :8585  |
+                    +---+----------+----+
+                        |          |
+              +---------v--+  +----v-----------+
+              |  Asterisk  |  |  Telegram Bot  |
+              |  (PJSIP)   |  |  (guruh xabar) |
+              +-----+------+  +----------------+
+                    |
+              +-----v------+
+              | Sarkor SIP |
+              | (trunk)    |
+              +-----------+
 ```
 
-Qayta yuklangandan keyin Ubuntu username va parol o'rnating.
-
-### 2.2 Asterisk o'rnatish
-
-WSL Ubuntu da:
-```bash
-# Yangilash
-sudo apt update && sudo apt upgrade -y
-
-# Asterisk o'rnatish
-sudo apt install -y asterisk asterisk-core-sounds-en
-
-# Asterisk ni ishga tushirish
-sudo systemctl start asterisk
-sudo systemctl enable asterisk
-```
-
-### 2.3 Asterisk AMI sozlash
-
-`/etc/asterisk/manager.conf` faylini tahrirlang:
-```bash
-sudo nano /etc/asterisk/manager.conf
-```
-
-Quyidagilarni qo'shing:
-```ini
-[general]
-enabled = yes
-port = 5038
-bindaddr = 0.0.0.0
-
-[autodialer]
-secret = autodialer123
-read = all
-write = all
-deny = 0.0.0.0/0.0.0.0
-permit = 0.0.0.0/0.0.0.0
-```
-
-### 2.4 Asterisk PJSIP sozlash
-
-`/etc/asterisk/pjsip.conf` faylini tahrirlang:
-```bash
-sudo nano /etc/asterisk/pjsip.conf
-```
-
-Sarkor Telecom uchun quyidagilarni qo'shing:
-```ini
-; === SARKOR TELECOM TRUNK ===
-
-[sarkor-transport]
-type=transport
-protocol=udp
-bind=0.0.0.0
-
-[sarkor-registration]
-type=registration
-transport=sarkor-transport
-outbound_auth=sarkor-auth
-server_uri=sip:sip.sarkor.uz
-client_uri=sip:998783337984@sip.sarkor.uz
-retry_interval=60
-
-[sarkor-auth]
-type=auth
-auth_type=userpass
-username=998783337984
-password=SizningParol123
-
-[sarkor-aor]
-type=aor
-contact=sip:sip.sarkor.uz
-
-[sarkor-endpoint]
-type=endpoint
-transport=sarkor-transport
-context=from-sarkor
-disallow=all
-allow=alaw
-allow=ulaw
-outbound_auth=sarkor-auth
-aors=sarkor-aor
-from_user=998783337984
-from_domain=sip.sarkor.uz
-
-[sarkor-identify]
-type=identify
-endpoint=sarkor-endpoint
-match=sip.sarkor.uz
-```
-
-### 2.5 Asterisk Dialplan sozlash
-
-`/etc/asterisk/extensions.conf` faylini tahrirlang:
-```bash
-sudo nano /etc/asterisk/extensions.conf
-```
-
-Quyidagilarni qo'shing:
-```ini
-[autodialer-dynamic]
-exten => _X.,1,NoOp(AutoDialer qo'ng'iroq: ${EXTEN})
- same => n,Answer()
- same => n,Wait(1)
- same => n,Playback(${AUDIO_FILE})
- same => n,Wait(1)
- same => n,Hangup()
-
-[from-sarkor]
-exten => _X.,1,NoOp(Kiruvchi qo'ng'iroq: ${CALLERID(num)})
- same => n,Hangup()
-```
-
-### 2.6 Asterisk qayta yuklash
-
-```bash
-sudo asterisk -rx "core reload"
-sudo asterisk -rx "pjsip reload"
-```
-
-### 2.7 WSL IP manzilini olish
-
-```bash
-ip addr show eth0 | grep inet
-```
-Natija: `172.29.124.85` (bu sizning `AMI_HOST`)
-
----
-
-## 3-BOSQICH: Loyihani sozlash
-
-### 3.1 Loyihani yuklab olish
-
-```bash
-# Windows CMD yoki PowerShell da
-cd C:\Users\YourUsername
-git clone https://github.com/Ikhtiyor-s/ip-telefon.git autodialer-pro
-cd autodialer-pro
-```
-
-### 3.2 Python muhitini yaratish
-
-```bash
-# Virtual environment yaratish
-python -m venv venv
-
-# Faollashtirish (Windows)
-venv\Scripts\activate
-
-# Kutubxonalarni o'rnatish
-pip install -r requirements.txt
-```
-
-### 3.3 .env faylini sozlash
-
-`autodialer-pro` papkasida `.env` fayl yarating:
-
-```bash
-# .env fayl namunasi
-
-# AMOCRM
-AMOCRM_SUBDOMAIN=welltech
-AMOCRM_TOKEN=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjkwMTU2MjdhY2U4MjUzYTMzZjIwZGY2MjBjYmQ4NTUxNWM4YjM3NTM4NDZmODgyZDZkNTUxNzE1OTY4NTJjM2E3OWMxYjUwYTg3YmJkZGViIn0...
-
-# TELEGRAM
-TELEGRAM_BOT_TOKEN=7683981246:AAFCH2u26L1ohHEOddFY8I26o4k_uXptb08
-TELEGRAM_CHAT_ID=-5219407458
-
-# ASTERISK AMI (WSL IP manzili)
-AMI_HOST=172.29.124.85
-AMI_PORT=5038
-AMI_USERNAME=autodialer
-AMI_PASSWORD=autodialer123
-
-# SOTUVCHI TELEFON RAQAMI
-SELLER_PHONE=+998901234567
-
-# VAQTLAR (sekundda)
-WAIT_BEFORE_CALL=90
-TELEGRAM_ALERT_TIME=180
-MAX_CALL_ATTEMPTS=2
-RETRY_INTERVAL=0
-```
-
-### Parametrlar tushuntirmasi:
-
-| Parametr | Tavsif | Namuna |
-|----------|--------|--------|
-| `AMOCRM_SUBDOMAIN` | amoCRM subdomain | `welltech` |
-| `AMOCRM_TOKEN` | amoCRM API token | JWT token |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token | `768398...:AAF...` |
-| `TELEGRAM_CHAT_ID` | Telegram guruh ID | `-5219407458` |
-| `AMI_HOST` | WSL IP manzili | `172.29.124.85` |
-| `AMI_PORT` | Asterisk AMI port | `5038` |
-| `AMI_USERNAME` | AMI username | `autodialer` |
-| `AMI_PASSWORD` | AMI parol | `autodialer123` |
-| `SELLER_PHONE` | Sotuvchi telefoni | `+998901234567` |
-| `WAIT_BEFORE_CALL` | Qo'ng'iroqdan oldin kutish | `90` (soniya) |
-| `TELEGRAM_ALERT_TIME` | Telegram xabar vaqti | `180` (soniya) |
-| `MAX_CALL_ATTEMPTS` | Maksimum qo'ng'iroq urinishlari | `2` |
-| `RETRY_INTERVAL` | Qayta qo'ng'iroq oralig'i | `0` (soniya) |
-
----
-
-## 4-BOSQICH: Audio fayllarni tayyorlash
-
-### 4.1 TTS audio fayllar
-
-Tizim avtomatik ravishda Edge TTS orqali o'zbek tilida audio fayllar yaratadi.
-
-**Qo'ng'iroqdagi xabar:**
-> "Assalomu alaykum, men nonbor ovozli bot xizmatiman, sizda N ta buyurtma bor, iltimos, buyurtmalaringizni tekshiring."
-
-### 4.2 WSL ga audio nusxalash
-
-**Avtomatik:** Tizim ishga tushganda audio fayllar avtomatik WSL ga ko'chiriladi.
-
-**Qo'lda** (agar kerak bo'lsa):
-```bash
-# WSL da papka yaratish va fayllarni nusxalash
-wsl mkdir -p /tmp/autodialer
-wsl cp /mnt/c/Users/Asus/autodialer-pro/audio/cache/*.wav /tmp/autodialer/
-```
-
----
-
-## 5-BOSQICH: Tizimni ishga tushirish
-
-### 5.1 Asterisk tekshirish
-
-WSL da:
-```bash
-# Asterisk ishlayaptimi?
-sudo systemctl status asterisk
-
-# SIP registratsiya
-sudo asterisk -rx "pjsip show registrations"
-
-# AMI ishlayaptimi?
-sudo asterisk -rx "manager show connected"
-```
-
-### 5.2 AutoDialer ishga tushirish
-
-Windows da:
-```bash
-cd C:\Users\Asus\autodialer-pro
-
-# Virtual environment faollashtirish
-venv\Scripts\activate
-
-# Ishga tushirish
-python src/autodialer.py
-```
-
-### 5.3 Muvaffaqiyatli ishga tushish
-
-Quyidagi xabarlarni ko'rishingiz kerak:
-```
-============================================================
-AUTODIALER PRO ISHGA TUSHMOQDA
-============================================================
-TTS xabarlarini tayyorlash...
-Asterisk AMI ga ulanish...
-AMI ulanish muvaffaqiyatli
-amoCRM polling boshlash...
-============================================================
-AUTODIALER PRO ISHLAYAPTI
-============================================================
-```
-
----
-
-## 6-BOSQICH: amoCRM sozlash
-
-### 6.1 Pipeline va Status
-
-AutoDialer quyidagi pipeline va statusni kuzatadi:
-- **Pipeline nomi:** `nonbor-order-manage`
-- **Status nomi:** `Tekshirilmoqda`
-
-Agar sizning pipeline va status nomlari boshqacha bo'lsa, `src/services/amocrm_service.py` faylida o'zgartiring:
-
-```python
-PIPELINE_NAME = "nonbor-order-manage"  # Sizning pipeline nomingiz
-STATUS_NAME = "Tekshirilmoqda"         # Sizning status nomingiz
-```
-
-### 6.2 Lead kontaktlari
-
-Har bir lead da quyidagi ma'lumotlar bo'lishi kerak:
-- **Buyurtma raqami** - lead nomi yoki custom field da
-- **Telefon raqami** - kontakt telefoni (ixtiyoriy, chunki asosiy qo'ng'iroq SELLER_PHONE ga)
-
----
-
-## Xatoliklarni tuzatish
-
-### AMI ulanish xatosi
-
-**Xato:** `AMI ulanish xatosi: Connection refused`
-
-**Yechim:**
-1. WSL IP manzilini tekshiring: `wsl ip addr show eth0`
-2. Asterisk ishlayaptimi: `wsl sudo systemctl status asterisk`
-3. `manager.conf` da `bindaddr = 0.0.0.0` ekanini tekshiring
-
-### SIP registratsiya muvaffaqiyatsiz
-
-**Xato:** `SIP registratsiya: MUVAFFAQIYATSIZ`
-
-**Yechim:**
-1. Sarkor ma'lumotlarini tekshiring (`pjsip.conf`)
-2. Internet ulanishini tekshiring
-3. Asterisk loglarni ko'ring: `wsl sudo tail -f /var/log/asterisk/messages`
-
-### Audio eshitilmadi
-
-**Xato:** Qo'ng'iroq bo'ldi lekin ovoz yo'q
-
-**Yechim:**
-1. Audio fayllar WSL da borligini tekshiring:
-   ```bash
-   wsl ls -la /tmp/autodialer/
-   ```
-2. Fayl formati to'g'ri ekanini tekshiring (WAV, 8kHz, mono)
-
-### amoCRM token eskirgan
-
-**Xato:** `401 Unauthorized`
-
-**Yechim:**
-1. amoCRM dan yangi token oling
-2. `.env` faylda `AMOCRM_TOKEN` ni yangilang
-
----
-
-## Foydali buyruqlar
-
-```bash
-# WSL IP olish
-wsl hostname -I
-
-# Asterisk CLI
-wsl sudo asterisk -rvvv
-
-# SIP registratsiya
-wsl sudo asterisk -rx "pjsip show registrations"
-
-# Faol qo'ng'iroqlar
-wsl sudo asterisk -rx "core show channels"
-
-# AMI ulanishlar
-wsl sudo asterisk -rx "manager show connected"
-
-# Loglarni ko'rish
-wsl sudo tail -f /var/log/asterisk/messages
-```
-
----
+## Texnologiyalar
+
+| Komponent | Texnologiya |
+|-----------|-------------|
+| Dasturlash tili | Python 3.11+ (async/await) |
+| API framework | aiohttp |
+| TTS (ovoz) | Microsoft Edge TTS (ko'p tilli) |
+| IP telefoniya | Asterisk + PJSIP |
+| SIP provayder | Sarkor Telecom |
+| Xabar almashish | Telegram Bot API |
+| Konteyner | Docker + docker-compose |
+| Buyurtma API | Nonbor API v2 |
 
 ## Loyiha tuzilishi
 
 ```
-autodialer-pro/
-├── .env                    # Konfiguratsiya
-├── requirements.txt        # Python kutubxonalari
-├── README.md              # Ushbu qo'llanma
-├── dialplan.conf          # Asterisk dialplan namunasi
-├── setup_dialplan.py      # Dialplan o'rnatish skripti
+ip-telefon/
+├── .env.example              # Sozlamalar namunasi
+├── .env.production           # Production sozlamalar (gitda YO'Q)
+├── docker-compose.yml        # Docker orchestration
+├── Dockerfile                # Autodialer image
+├── requirements.txt          # Python dependencies
+├── docker-entrypoint.sh      # Container entrypoint
+│
+├── src/
+│   ├── autodialer.py         # Asosiy engine (polling, call logic, state)
+│   ├── api_server.py         # REST API server (:8585)
+│   ├── models/
+│   │   └── order.py          # Buyurtma modeli
+│   └── services/
+│       ├── asterisk_service.py   # Asterisk AMI client
+│       ├── nonbor_service.py     # Nonbor API client
+│       ├── telegram_service.py   # Telegram bot + guruh xabarlari
+│       ├── tts_service.py        # Edge TTS ovoz yaratish
+│       └── stats_service.py      # Statistika to'plash
+│
+├── config/
+│   └── asterisk/
+│       ├── pjsip.conf        # SIP trunk konfiguratsiya
+│       ├── extensions.conf   # Dialplan (call flow)
+│       └── manager.conf      # AMI sozlamalari
+│
 ├── audio/
-│   └── cache/             # TTS audio fayllar (1-20 buyurtma)
-├── logs/                  # Log fayllar
-└── src/
-    ├── autodialer.py      # Asosiy business logic (ishga tushirish)
-    └── services/
-        ├── __init__.py          # Servislar eksporti
-        ├── amocrm_service.py    # amoCRM API
-        ├── asterisk_service.py  # Asterisk AMI
-        ├── telegram_service.py  # Telegram Bot
-        └── tts_service.py       # Text-to-Speech + WSL sync
+│   └── cache/                # TTS audio kesh (*.wav)
+├── data/                     # Persistent data (JSON)
+└── logs/                     # Log fayllar
 ```
 
----
+## Ishlash jarayoni
+
+### Yangi buyurtma
+
+```
+1. Nonbor API dan yangi buyurtma keldi (state=CHECKING)
+2. Biznes Telegram guruhiga xabar yuborildi
+3. 90 soniya kutildi (sotuvchi ilovada qabul qilishi uchun)
+4. Hali CHECKING bo'lsa -> TTS audio yaratildi -> Asterisk orqali qo'ng'iroq
+5. Javob berdi -> buyurtma kommunikatsiya qilindi deb belgilandi
+6. Javob bermadi -> unanswered_sellers ga qo'shildi -> keyingi siklda qayta qo'ng'iroq
+7. 180 soniyadan keyin hali CHECKING -> Telegram support guruhga ogohlantirish
+```
+
+### Reja buyurtma
+
+```
+1. Reja buyurtma qabul qilindi (is_planned=true)
+2. planned_group_alert_time daqiqa oldin -> Telegram guruhga eslatma
+3. planned_reminder_time daqiqa oldin -> Asterisk orqali qo'ng'iroq
+```
+
+### Qo'ng'iroq jarayoni
+
+```
+Autodialer                  Asterisk                    Telefon
+    |                          |                          |
+    |-- AMI Originate -------->|                          |
+    |   (PJSIP/phone@sarkor)  |-- SIP INVITE ----------->|
+    |                          |                          |
+    |                          |<-- 200 OK (javob) -------|
+    |                          |-- Answer() ------------->|
+    |                          |-- Wait(1) -------------->|
+    |                          |-- Playback(audio) ------>|  "Sizda 3 ta buyurtma..."
+    |                          |-- Wait(2) -------------->|
+    |                          |-- Hangup() ------------->|
+    |                          |                          |
+    |<-- OriginateResponse ----|                          |
+    |   (Success/Failure)      |                          |
+```
+
+## O'rnatish
+
+### 1. Repo klonlash
+
+```bash
+git clone https://github.com/Ikhtiyor-s/ip-telefon.git
+cd ip-telefon
+```
+
+### 2. Sozlamalarni tayorlash
+
+```bash
+cp .env.example .env.production
+nano .env.production  # Haqiqiy qiymatlarni yozing
+```
+
+**Muhim:** `.env.production` da inline comment (`KEY=value # comment`) ishlatmang. Docker `--env-file` qo'llab-quvvatlamaydi.
+
+### 3. Docker bilan ishga tushirish
+
+```bash
+# Barcha konteynerlarni build va ishga tushirish
+docker-compose up -d --build
+
+# Loglarni kuzatish
+docker logs -f autodialer-pro
+```
+
+### 4. Tekshirish
+
+```bash
+# Konteynerlar ishlayaptimi
+docker ps
+
+# Health check
+curl http://localhost:8585/api/autodialer/health
+
+# Statistika
+curl -H "X-API-Key: YOUR_KEY" http://localhost:8585/api/autodialer/stats
+```
+
+## Sozlamalar (.env.production)
+
+| Parametr | Tavsif | Default |
+|----------|--------|---------|
+| `NONBOR_BASE_URL` | Nonbor API manzili | - |
+| `NONBOR_SECRET` | Nonbor API kaliti | - |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |
+| `TELEGRAM_CHAT_ID` | Support guruh ID | - |
+| `AMI_HOST` | Asterisk AMI host | `127.0.0.1` |
+| `AMI_PORT` | Asterisk AMI port | `5038` |
+| `AMI_USERNAME` | AMI foydalanuvchi | `autodialer` |
+| `AMI_PASSWORD` | AMI parol | - |
+| `API_SECRET_KEY` | REST API kaliti | - |
+| `WAIT_BEFORE_CALL` | Qo'ng'iroqdan oldin kutish (sek) | `90` |
+| `TELEGRAM_ALERT_TIME` | Telegram ogohlantirish vaqti (sek) | `180` |
+| `MAX_CALL_ATTEMPTS` | Maksimum qo'ng'iroq urinishi | `2` |
+| `RETRY_INTERVAL` | Qayta urinish oralig'i (sek) | `30` |
+| `PLANNED_REMINDER_TIME` | Reja qo'ng'iroq vaqti (daq) | `60` |
+| `PLANNED_GROUP_ALERT_TIME` | Reja guruh xabari vaqti (daq) | `60` |
+
+## Docker arxitekturasi
+
+```
+docker-compose.yml
+├── autodialer-asterisk     (andrius/asterisk:latest)
+│   ├── network: host
+│   ├── volumes:
+│   │   ├── config/asterisk/*.conf -> /etc/asterisk/ (ro)
+│   │   └── autodialer-audio -> /var/lib/asterisk/sounds/autodialer
+│   └── healthcheck: asterisk -rx "core show channels"
+│
+├── autodialer-pro          (autodialer-pro:latest)
+│   ├── network: host
+│   ├── depends_on: asterisk (healthy)
+│   ├── volumes:
+│   │   ├── autodialer-audio -> /app/audio
+│   │   ├── ./logs -> /app/logs
+│   │   └── ./data -> /app/data
+│   ├── env_file: .env.production
+│   └── healthcheck: http://localhost:8585/api/autodialer/health
+│
+└── volumes:
+    └── autodialer-audio    (named, shared between containers)
+```
+
+**Audio volume:** TTS `audio/cache/*.wav` fayllarni yaratadi. Asterisk xuddi shu fayllarni `Playback()` orqali o'ynatadi.
+
+## API Endpoints
+
+Barcha endpointlar `X-API-Key` header talab qiladi (`/health` dan tashqari).
+
+| Method | Endpoint | Tavsif |
+|--------|----------|--------|
+| GET | `/api/autodialer/health` | Health check (ochiq) |
+| GET | `/api/autodialer/stats` | Umumiy statistika |
+| GET | `/api/autodialer/calls?page=1` | Qo'ng'iroqlar ro'yxati |
+| GET | `/api/autodialer/orders?page=1` | Buyurtmalar ro'yxati |
+| GET | `/api/autodialer/daily-trend?days=7` | Kunlik trend |
+| GET | `/api/autodialer/live-orders` | Hozirgi buyurtmalar |
+| GET | `/api/autodialer/businesses` | Bizneslar ro'yxati |
+| GET | `/api/autodialer/config` | Joriy sozlamalar |
+| POST | `/api/autodialer/config` | Sozlamalarni yangilash |
+| POST | `/api/autodialer/call-business` | Qo'lda qo'ng'iroq |
+| GET | `/api/autodialer/logs?lines=100` | Oxirgi loglar |
+
+## TTS (Text-to-Speech)
+
+Qo'llab-quvvatlanadigan tillar:
+
+| Til | Ovoz | Kod |
+|-----|------|-----|
+| O'zbekcha | uz-UZ-MadinaNeural | `uz` |
+| Ruscha | ru-RU-SvetlanaNeural | `ru` |
+| Inglizcha | en-US-JennyNeural | `en` |
+| Xitoycha | zh-CN-XiaoxiaoNeural | `zh` |
+| Qozoqcha | kk-KZ-AigulNeural | `kk` |
+
+Yangi til qo'shish: `src/services/tts_service.py` da 3 ta dict ga qator qo'shing (`LANG_VOICES`, `ORDER_MESSAGES`, `PLANNED_MESSAGES`).
+
+Audio kesh: matn + til MD5 hash bilan keshlanadi. Matn o'zgarsa eski keshni tozalang:
+```bash
+docker exec autodialer-pro rm -rf /app/audio/cache/*
+docker restart autodialer-pro
+```
+
+## Deploy (yangilash)
+
+```bash
+cd /opt/autodialer-pro
+
+# 1. Yangi kod
+git pull origin master
+
+# 2. Rebuild va restart
+docker stop autodialer-pro && docker rm autodialer-pro
+docker build -t autodialer-pro .
+docker run -d \
+  --name autodialer-pro \
+  --network host \
+  --restart unless-stopped \
+  --env-file .env.production \
+  -v autodialer-audio:/app/audio \
+  -v $(pwd)/logs:/app/logs \
+  -v $(pwd)/data:/app/data \
+  autodialer-pro
+
+# 3. Log tekshirish
+docker logs -f autodialer-pro
+```
+
+**Agar TTS matnlari o'zgargan bo'lsa** (yangi audio kerak):
+```bash
+docker exec autodialer-pro rm -rf /app/audio/cache/*
+docker restart autodialer-pro
+```
+
+## Xatoliklarni tuzatish
+
+| Muammo | Sabab | Yechim |
+|--------|-------|--------|
+| `planned_telegram_time` TypeError | Eski parametr nomi kodda qolgan | `git pull` va rebuild |
+| `invalid literal for int()` | `.env` da inline comment (`60 # ...`) | Inline commentlarni olib tashlang |
+| Audio gapirmayapti | TTS kesh eskirgan (matn o'zgargan) | `rm -rf audio/cache/*` va restart |
+| AMI connection refused | Asterisk container ishlamayapti | `docker restart autodialer-asterisk` |
+| SIP registration failed | Sarkor credentials noto'g'ri | `config/asterisk/pjsip.conf` tekshiring |
+| Telegram xabar yuborilmayapti | Bot token noto'g'ri yoki guruhga qo'shilmagan | Token va chat_id tekshiring |
+| Container crash loop | `.env.production` xatosi yoki kod bug | `docker logs autodialer-pro` tekshiring |
 
 ## Xavfsizlik
 
-**Eslatma:** `.env` faylida maxfiy ma'lumotlar bor:
-- amoCRM API token
-- Telegram bot token
-- AMI parol
+- `.env.production` gitda kuzatilmaydi (`.gitignore` da)
+- API endpointlar `X-API-Key` bilan himoyalangan
+- Docker container non-root user (`appuser`) bilan ishlaydi
+- Input validation: barcha query parametrlar chegaralangan
+- Security headers: `X-Content-Type-Options`, `X-Frame-Options`
+- Request size limit: 1MB
 
-Loyihani boshqa muhitga o'rnatganda `.env` faylini to'g'ri sozlang.
+**Muhim:** Sirlarni (token, parol) hech qachon kodga yozmang. Faqat `.env.production` da saqlang.
 
----
+## Muallif
 
-## Qo'llab-quvvatlash
-
-Savollar va muammolar uchun:
-- GitHub Issues: https://github.com/Ikhtiyor-s/ip-telefon/issues
-
----
-
-## Litsenziya
-
-MIT License
-
----
-
-**Muallif:** WellTech Team
-**Versiya:** 1.0.0
-**Sana:** 2026-01-14
+WellTech Team | Versiya 2.0.0
