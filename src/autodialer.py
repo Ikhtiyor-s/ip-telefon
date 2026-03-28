@@ -399,12 +399,21 @@ class AutodialerPro:
         return None
 
     def _resolve_lang(self, biz_id, api_lang: str = "uz") -> str:
+        """Sotuvchi tilini aniqlash: uz, ru, en"""
+        supported = {"uz", "ru", "en", "zh"}
         biz_str = str(biz_id or "")
         if biz_str and self.stats_handler:
             override = self.stats_handler._business_languages.get(biz_str)
             if override:
-                return override
-        return (api_lang or "uz").lower()[:2]
+                lang = override.lower()[:2]
+                if lang in supported:
+                    return lang
+                logger.warning(f"Biznes #{biz_id} override til noto'g'ri: {override!r}, default ishlatiladi")
+        lang = (api_lang or "uz").lower()[:2]
+        if lang not in supported:
+            logger.warning(f"Biznes #{biz_id} til qo'llab-quvvatlanmaydi: {lang!r}, default: uz")
+            return "uz"
+        return lang
 
     def _safe_task(self, coro, name: str = ""):
         """Xatolikni tutib oladigan xavfsiz task yaratish"""
@@ -662,7 +671,7 @@ class AutodialerPro:
         # TTS oldindan yaratish fon rejimda (API ni bloklamaslik uchun)
         if not self.skip_asterisk:
             logger.info("TTS xabarlarini fon rejimda tayyorlash...")
-            asyncio.create_task(self.tts.pregenerate_messages(max_count=50))
+            asyncio.create_task(self.tts.pregenerate_messages())
         else:
             logger.info("TTS o'tkazib yuborildi (Asterisk o'chirilgan)")
 
@@ -1764,8 +1773,9 @@ class AutodialerPro:
             # TTS audio olish (tilga qarab)
             audio_path = await self.tts.generate_order_message(order_count, lang=seller_lang)
             if not audio_path:
-                logger.error(f"TTS audio yaratilmadi: {seller_phone}")
+                logger.error(f"TTS audio yaratilmadi: {seller_phone}, til: {seller_lang}")
                 return None
+            logger.info(f"TTS audio tayyor: {audio_path} ({audio_path.stat().st_size} bayt), til: {seller_lang}")
 
             # Buyurtma IDlari
             order_ids = [o.get("lead_id") for o in seller_data["orders"]]

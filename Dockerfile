@@ -32,7 +32,9 @@ COPY config/ ./config/
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 # Create directories va ruxsatlar
-RUN mkdir -p audio logs data && \
+# audio/cache papkasiga 777 - Asterisk konteyner ham o'qiy olishi uchun (shared volume)
+RUN mkdir -p audio/cache logs data && \
+    chmod -R 777 audio && \
     chown -R appuser:appuser /app && \
     sed -i 's/\r//' /docker-entrypoint.sh && \
     chmod +x /docker-entrypoint.sh

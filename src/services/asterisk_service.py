@@ -411,7 +411,6 @@ class AsteriskAMI:
             return CallResult(status=CallStatus.FAILED, error=str(e))
 
         # Audio faylni Asterisk sounds pathga convert qilish
-        # Windows pathdan faqat fayl nomini olish
         import os
         # ASTERISK_PLAYBACK_PATH: Asterisk konteyner ichidagi audio yo'l
         # ASTERISK_SOUNDS_PATH: Autodialer konteyner ichidagi audio yo'l (fayllar yoziladigan)
@@ -420,13 +419,25 @@ class AsteriskAMI:
         audio_filename = Path(str(audio_file)).stem  # extension siz fayl nomi
         wsl_audio_path = f"{playback_path}/{audio_filename}"
 
+        # Audio fayl mavjudligini tekshirish (autodialer konteyner ichida)
+        audio_file_path = Path(str(audio_file))
+        if audio_file_path.exists():
+            file_size = audio_file_path.stat().st_size
+            if file_size == 0:
+                logger.error(f"Audio fayl bo'sh (0 bayt): {audio_file}")
+                return CallResult(status=CallStatus.FAILED, error="Audio file is empty")
+            logger.info(f"Audio fayl tekshirildi: {audio_file} ({file_size} bayt)")
+        else:
+            logger.error(f"Audio fayl topilmadi: {audio_file}")
+            return CallResult(status=CallStatus.FAILED, error=f"Audio file not found: {audio_file}")
+
         # Channel variable
         channel_vars = f"AUDIO_FILE={wsl_audio_path}"
         if variables:
             for k, v in variables.items():
                 channel_vars += f",{k}={v}"
 
-        logger.info(f"Qo'ng'iroq boshlanmoqda: {clean_number}, Audio: {wsl_audio_path}")
+        logger.info(f"Qo'ng'iroq boshlanmoqda: {clean_number}, Audio: {wsl_audio_path}, Fayl: {audio_file}")
 
         response = await self._send_action(
             "Originate",
