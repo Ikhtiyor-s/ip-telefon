@@ -443,7 +443,7 @@ class AsteriskAMI:
             "Originate",
             Channel=f"PJSIP/{clean_number}@sarkor-endpoint",
             Context=context,
-            Exten=audio_filename,  # Audio fayl nomi (hash) - dialplan uchun
+            Exten="s",
             Priority="1",
             CallerID=f"WellTech <+998783331002>",
             Timeout="30000",
