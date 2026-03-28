@@ -27,6 +27,15 @@ DATA_DIR = PROJECT_ROOT / "data"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 
+def _safe_int(query: dict, key: str, default: int, min_val: int = 1, max_val: int = 10000) -> int:
+    """Query parametrdan xavfsiz int olish (overflow/injection oldini olish)"""
+    try:
+        val = int(query.get(key, default))
+        return max(min_val, min(val, max_val))
+    except (ValueError, TypeError):
+        return default
+
+
 class AutodialerAPI:
     """
     Autodialer HTTP API
@@ -38,12 +47,15 @@ class AutodialerAPI:
     def __init__(self, autodialer=None, port: int = 8585):
         self.autodialer = autodialer
         self.port = port
-        self.api_key = os.getenv("API_SECRET_KEY", "autodialer-api-secret-2024-nonbor")
+        self.api_key = os.getenv("API_SECRET_KEY", "")
         _cors_origins = [
             o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost,http://localhost:80").split(",")
         ]
         self._cors_origins = set(_cors_origins)
-        self.app = web.Application(middlewares=[self._auth_cors_middleware])
+        self.app = web.Application(
+            middlewares=[self._auth_cors_middleware],
+            client_max_size=1024 * 1024  # 1MB max request size
+        )
         self._setup_routes()
         self._runner = None
 
@@ -121,7 +133,11 @@ class AutodialerAPI:
     # ===== HELPERS =====
 
     def _json(self, data, status=200):
-        return web.json_response(data, status=status)
+        resp = web.json_response(data, status=status)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     def _ok(self, data=None, **kwargs):
         resp = {"success": True}
@@ -172,8 +188,8 @@ class AutodialerAPI:
     async def get_calls(self, request):
         """Qo'ng'iroqlar ro'yxati"""
         period = request.query.get("period", "daily")
-        page = int(request.query.get("page", 1))
-        page_size = int(request.query.get("page_size", 20))
+        page = _safe_int(request.query, "page", 1, 1, 1000)
+        page_size = _safe_int(request.query, "page_size", 20, 1, 100)
 
         if not self._stats:
             return self._ok({"records": [], "total": 0, "page": 1, "total_pages": 0})
@@ -194,8 +210,8 @@ class AutodialerAPI:
     async def get_orders(self, request):
         """Buyurtmalar ro'yxati"""
         period = request.query.get("period", "daily")
-        page = int(request.query.get("page", 1))
-        page_size = int(request.query.get("page_size", 20))
+        page = _safe_int(request.query, "page", 1, 1, 1000)
+        page_size = _safe_int(request.query, "page_size", 20, 1, 100)
         status_filter = request.query.get("status", "")
 
         if not self._stats:
@@ -220,7 +236,7 @@ class AutodialerAPI:
 
     async def get_daily_trend(self, request):
         """Kunlik trend — oxirgi N kun"""
-        days = int(request.query.get("days", 7))
+        days = _safe_int(request.query, "days", 7, 1, 365)
         if not self._stats:
             return self._ok([])
 
@@ -526,7 +542,7 @@ class AutodialerAPI:
     async def get_business_orders(self, request):
         """Biznes uchun buyurtmalar"""
         biz_id = int(request.match_info["biz_id"])
-        page = int(request.query.get("page", 1))
+        page = _safe_int(request.query, "page", 1, 1, 1000)
         page_size = 20
 
         if not self._stats:
@@ -774,7 +790,7 @@ class AutodialerAPI:
 
     async def get_logs(self, request):
         """Oxirgi log yozuvlarini olish"""
-        lines = int(request.query.get("lines", 100))
+        lines = _safe_int(request.query, "lines", 100, 1, 1000)
         log_file = LOGS_DIR / "autodialer.log"
 
         if not log_file.exists():
@@ -837,8 +853,8 @@ class AutodialerAPI:
         try:
             result = await self.autodialer.call_business_by_id(int(biz_id))
         except Exception as e:
-            logger.error(f"call_business xato: {e}")
-            return self._err(str(e), status=500)
+            logger.error(f"call_business xato: {e}", exc_info=True)
+            return self._err("Ichki server xatosi", status=500)
 
         if result.get("success"):
             return self._ok(result)

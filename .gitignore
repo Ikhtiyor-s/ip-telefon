@@ -8,6 +8,9 @@ data/
 !data/business_languages.json
 tmpclaude-*
 .env
+.env.*
+.env.production
+.env.local
 *.log
 test_voices/
 nul

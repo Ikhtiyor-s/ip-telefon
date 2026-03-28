@@ -274,7 +274,6 @@ class AutodialerPro:
         # Vaqt tekshiruv markerlar - hasattr() dan qochish uchun __init__ da e'lon
         self._last_notif_check = None
         self._last_planned_check = None
-        self._debug_logged = False
 
         # Servislar
         self.tts = TTSService(self.audio_dir, provider="edge")
@@ -407,6 +406,15 @@ class AutodialerPro:
                 return override
         return (api_lang or "uz").lower()[:2]
 
+    def _safe_task(self, coro, name: str = ""):
+        """Xatolikni tutib oladigan xavfsiz task yaratish"""
+        async def _wrapper():
+            try:
+                await coro
+            except Exception as e:
+                logger.error(f"Task xato [{name}]: {e}", exc_info=True)
+        return asyncio.create_task(_wrapper())
+
     async def _check_planned_reminders(self):
         """
         Reja buyurtmalar uchun eslatma yuborish VA QO'NG'IROQ QILISH.
@@ -512,7 +520,7 @@ class AutodialerPro:
                 count = len(orders)
 
                 if not self.skip_asterisk:
-                    asyncio.create_task(self._planned_reminder_call(biz_id, count))
+                    self._safe_task(self._planned_reminder_call(biz_id, count), f"planned_call_{biz_id}")
                     logger.info(f"Reja qo'ng'iroq boshlandi: biz={biz_id}, {count} ta buyurtma")
 
                 for o in orders:
@@ -1052,17 +1060,6 @@ class AutodialerPro:
                 if biz_id:
                     in_groups = biz_id in self.stats_handler._business_groups
                     logger.info(f"Buyurtma #{order_id}: biznes='{biz_title}' (ID={biz_id}), guruhda={in_groups}")
-                    # DEBUG: Birinchi buyurtmaning barcha kalitlarini ko'rsatish (faqat bir marta)
-                    if not self._debug_logged:
-                        self._debug_logged = True
-                        logger.info(f"DEBUG #{order_id}: order_keys={list(order.keys())}")
-                        logger.info(f"DEBUG #{order_id}: user={order.get('user')}")
-                        logger.info(f"DEBUG #{order_id}: delivery={order.get('delivery')}")
-                        # Vaqt bilan bog'liq barcha fieldlarni ko'rsatish
-                        for key in order.keys():
-                            val = order.get(key)
-                            if val and ('time' in str(key).lower() or 'date' in str(key).lower() or 'plan' in str(key).lower() or 'schedule' in str(key).lower() or 'expect' in str(key).lower()):
-                                logger.info(f"DEBUG #{order_id}: {key}={val}")
 
                 if not biz_id or biz_id not in self.stats_handler._business_groups:
                     if biz_id:
@@ -1163,7 +1160,7 @@ class AutodialerPro:
                         # O'zbekiston vaqtiga o'tkazish
                         dt_uz = dt.astimezone(uz_tz)
                         delivery_time = dt_uz.strftime("%d.%m %H:%M")
-                    except:
+                    except (ValueError, TypeError, AttributeError):
                         delivery_time = str(raw_planned_time)
 
                 # Agar planned_datetime yo'q bo'lsa, boshqa fieldlardan qidirish
@@ -2248,16 +2245,6 @@ class AutodialerPro:
         # 180s timer davom etadi - buyurtmalar uchun
         logger.info("Telegram xabar yuborildi, 180s timer davom etmoqda")
 
-    # DEPRECATED: _send_new_order_alert endi ishlatilmaydi
-    # Yangi buyurtmalar uchun 180s timer kutiladi - _check_and_process() da
-    # Eski kod saqlab qolindi - kelajakda kerak bo'lishi mumkin
-    #
-    # async def _send_new_order_alert(self, new_order_ids: list):
-    #     """
-    #     Yangi buyurtma kelganda TEKSHIRILMOQDA status xabarini yangilash
-    #     ENDI ISHLATILMAYDI - 180s timer orqali yuboriladi
-    #     """
-    #     pass
 
 
 async def main():

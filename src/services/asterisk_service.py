@@ -57,7 +57,7 @@ class AsteriskAMI:
         host: str = "127.0.0.1",
         port: int = 5038,
         username: str = "autodialer",
-        password: str = "autodialer123",
+        password: str = "",
         wsl_sounds_path: str = "/var/lib/asterisk/sounds/autodialer"
     ):
         self.host = host
