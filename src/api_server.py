@@ -76,7 +76,7 @@ class AutodialerAPI:
                     resp = ex
             else:
                 # API key tekshirish
-                api_key = request.headers.get("X-API-Key") or request.query.get("api_key", "")
+                api_key = request.headers.get("X-API-Key", "")
                 if api_key != self.api_key:
                     resp = web.json_response(
                         {"success": False, "message": "API kalit noto'g'ri yoki berilmagan"},
