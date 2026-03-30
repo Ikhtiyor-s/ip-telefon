@@ -142,33 +142,10 @@ class AdminCallService:
             await asyncio.sleep(30)
 
     async def _check_new_businesses(self):
-        # 1. Avval checking endpoint ni sinab ko'rish
-        checking = await self.nonbor.get_checking_businesses()
-        if checking:
-            # CHECKING endpoint ishlaydi
-            current_ids = {b.get("id") for b in checking if b.get("id")}
-            new_ids = current_ids - self._known_biz_ids
-            if new_ids:
-                logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes: {new_ids}")
-                self._known_biz_ids = current_ids
-                self._save_config()
-                wait = self.config.get("wait_before_call", 60)
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                await self._call_admin_new_business(len(current_ids))
-            else:
-                removed = self._known_biz_ids - current_ids
-                if removed:
-                    self._known_biz_ids = current_ids
-                    self._save_config()
+        """Accepted bizneslar kuzatish - yangi biznes qo'shilganda adminga qo'ng'iroq"""
+        current_ids = await self.nonbor.get_accepted_business_ids()
+        if not current_ids:
             return
-
-        # 2. Fallback: accepted bizneslar kuzatish
-        accepted = await self.nonbor.get_all_businesses()
-        if not accepted:
-            return
-        current_ids = {b.get("id") for b in accepted if b.get("id")}
-        new_ids = current_ids - self._known_biz_ids
 
         if not self._known_biz_ids:
             # Birinchi ishga tushish - hamma ID larni yozib olish
@@ -177,14 +154,24 @@ class AdminCallService:
             logger.info(f"Admin: boshlang'ich {len(current_ids)} ta biznes kuzatuvga olindi")
             return
 
+        new_ids = current_ids - self._known_biz_ids
         if new_ids:
             logger.info(f"Admin: {len(new_ids)} ta yangi biznes topildi: {new_ids}")
             self._known_biz_ids = current_ids
             self._save_config()
+
             wait = self.config.get("wait_before_call", 60)
             if wait > 0:
+                logger.info(f"Admin: {wait}s kutish...")
                 await asyncio.sleep(wait)
-            await self._call_admin_new_business(len(new_ids))
+
+            # Hozirgi accepted bizneslar soni bilan qo'ng'iroq
+            await self._call_admin_new_business(len(current_ids))
+        else:
+            # O'chirilgan bizneslarni yangilash
+            if current_ids != self._known_biz_ids:
+                self._known_biz_ids = current_ids
+                self._save_config()
 
     async def _call_admin_new_business(self, checking_count: int):
         phones = self._get_enabled_phones()
@@ -236,10 +223,9 @@ class AdminCallService:
             logger.warning("Admin: kunlik hisobot - raqamlar yo'q")
             return
 
-        # Ma'lumotlar olish
-        checking_biz = await self.nonbor.get_checking_businesses()
-        biz_count = len(checking_biz)
-        product_count = await self.nonbor.get_checking_products_count()
+        # Ma'lumotlar olish - accepted bizneslar soni
+        biz_count = await self.nonbor.get_accepted_business_count()
+        product_count = 0  # CHECKING product API bot secret bilan ishlamaydi
 
         lang = self.config.get("daily_report_language", "uz")
         audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
@@ -317,25 +303,21 @@ class AdminCallService:
 
         lang = lang or self.config.get("new_business_call_language", "uz")
 
-        # Haqiqiy CHECKING bizneslar va mahsulotlar sonini olish
+        # Accepted bizneslar sonini olish
         try:
-            checking_biz = await self.nonbor.get_checking_businesses()
-            biz_count = len(checking_biz)
-            product_count = await self.nonbor.get_checking_products_count()
+            biz_count = await self.nonbor.get_accepted_business_count()
         except Exception as e:
-            logger.warning(f"Test call: CHECKING ma'lumotlar olishda xato: {e}")
+            logger.warning(f"Test call: biznes sonini olishda xato: {e}")
             biz_count = 0
-            product_count = 0
 
         # Hisobot audio yaratish
-        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+        audio = await self.tts.generate_admin_daily_report(biz_count, 0, lang=lang)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}
 
         if self.skip_asterisk:
             return {"success": True, "message": "Skip asterisk rejimda", "phones": phones,
-                    "biz_count": biz_count, "product_count": product_count}
+                    "biz_count": biz_count}
 
         await self._call_admins(str(audio), "test")
-        return {"success": True, "phones": phones,
-                "biz_count": biz_count, "product_count": product_count}
+        return {"success": True, "phones": phones, "biz_count": biz_count}

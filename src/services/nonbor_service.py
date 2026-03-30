@@ -122,35 +122,25 @@ class NonborService:
         return businesses
 
     async def get_checking_businesses(self) -> List[Dict]:
-        """CHECKING statusidagi bizneslarni olish — business/list2/ dan filtrlash"""
-        data = await self._make_request("GET", "business/list2/", params={"page_size": 100})
-        if not data:
-            return []
-        results = data.get("result", data)
-        if isinstance(results, dict):
-            results = results.get("results", [])
-        return [b for b in results if b.get("state") == "CHECKING"]
+        """CHECKING bizneslar - bot secret bilan olish imkoni yo'q.
+        Shuning uchun bo'sh list qaytaradi. Yangi biznes kuzatish
+        accepted bizneslar fallback orqali ishlaydi (admin_call_service da).
+        """
+        return []
 
     async def get_checking_products_count(self) -> int:
-        """CHECKING statusidagi mahsulotlar sonini olish — har bir CHECKING biznesning mahsulotlarini sanash"""
-        checking = await self.get_checking_businesses()
-        if not checking:
-            return 0
-        total = 0
-        for biz in checking:
-            biz_id = biz.get("id")
-            if not biz_id:
-                continue
-            data = await self._make_request("GET", f"business/{biz_id}/products-by-category/", params={"page_size": 100})
-            if data and isinstance(data, list):
-                for cat in data:
-                    products = cat.get("products", [])
-                    total += len(products)
-        return total
+        """CHECKING mahsulotlar soni - bot secret bilan olish imkoni yo'q."""
+        return 0
 
-    async def get_all_businesses(self) -> List[Dict]:
-        """Barcha bizneslarni olish (accepted) - yangi biznes kuzatish uchun"""
-        return await self.get_businesses()
+    async def get_accepted_business_ids(self) -> set:
+        """Accepted bizneslar ID lari - yangi biznes kuzatish uchun"""
+        businesses = await self.get_businesses()
+        return {b.get("id") for b in businesses if b.get("id")}
+
+    async def get_accepted_business_count(self) -> int:
+        """Accepted bizneslar soni"""
+        businesses = await self.get_businesses()
+        return len(businesses)
 
     async def get_business_by_id(self, biz_id: int) -> Optional[Dict]:
         """Biznes ID bo'yicha biznes ma'lumotlarini olish"""
