@@ -327,12 +327,7 @@ class AdminCallService:
             biz_count = 0
             product_count = 0
 
-        # Hech narsa yo'q bo'lsa qo'ng'iroq qilmaslik
-        if biz_count == 0 and product_count == 0:
-            return {"success": False, "error": "Tekshiruvda hech narsa yo'q, qo'ng'iroq kerak emas",
-                    "biz_count": 0, "product_count": 0}
-
-        # Kunlik hisobot formatida aytish (biznes + mahsulot soni bilan)
+        # Hisobot audio yaratish
         audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}

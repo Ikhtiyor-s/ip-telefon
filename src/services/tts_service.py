@@ -76,9 +76,15 @@ def _admin_new_business_text(count: int, lang: str) -> str:
 def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> str:
     lang = (lang or DEFAULT_LANG).lower()
 
-    # Ikkalasi 0 — bu funksiya chaqirilmasligi kerak, lekin ehtiyot uchun
+    # Ikkalasi 0 — test qo'ng'iroq uchun
     if biz_count == 0 and product_count == 0:
-        return ""
+        test_messages = {
+            "uz": "Assalomu alaykum! Nonbor tizimi ishlayapti. Hozirda tekshiruvda biznes va mahsulot yo'q.",
+            "ru": "Здравствуйте! Система Нонбор работает. Сейчас на проверке нет бизнесов и товаров.",
+            "en": "Hello! Nonbor system is working. Currently no businesses or products are in checking status.",
+            "zh": "您好！Nonbor系统正常运行。目前没有待审核的商家和产品。",
+        }
+        return test_messages.get(lang) or test_messages[DEFAULT_LANG]
 
     # Faqat biznes bor
     if product_count == 0:
