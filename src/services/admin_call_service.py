@@ -142,31 +142,49 @@ class AdminCallService:
             await asyncio.sleep(30)
 
     async def _check_new_businesses(self):
+        # 1. Avval checking endpoint ni sinab ko'rish
         checking = await self.nonbor.get_checking_businesses()
-        current_ids = {b.get("id") for b in checking if b.get("id")}
-
-        # Yangi bizneslar (avval ko'rilmaganlar)
-        new_ids = current_ids - self._known_biz_ids
-
-        if new_ids:
-            logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes: {new_ids}")
-            self._known_biz_ids = current_ids
-            self._save_config()
-
-            # Kutish
-            wait = self.config.get("wait_before_call", 60)
-            if wait > 0:
-                logger.info(f"Admin: {wait}s kutish...")
-                await asyncio.sleep(wait)
-
-            # Qo'ng'iroq
-            await self._call_admin_new_business(len(current_ids))
-        else:
-            # O'chirilgan bizneslarni known dan tozalash
-            removed = self._known_biz_ids - current_ids
-            if removed:
+        if checking:
+            # CHECKING endpoint ishlaydi
+            current_ids = {b.get("id") for b in checking if b.get("id")}
+            new_ids = current_ids - self._known_biz_ids
+            if new_ids:
+                logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes: {new_ids}")
                 self._known_biz_ids = current_ids
                 self._save_config()
+                wait = self.config.get("wait_before_call", 60)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                await self._call_admin_new_business(len(current_ids))
+            else:
+                removed = self._known_biz_ids - current_ids
+                if removed:
+                    self._known_biz_ids = current_ids
+                    self._save_config()
+            return
+
+        # 2. Fallback: accepted bizneslar kuzatish
+        accepted = await self.nonbor.get_all_businesses()
+        if not accepted:
+            return
+        current_ids = {b.get("id") for b in accepted if b.get("id")}
+        new_ids = current_ids - self._known_biz_ids
+
+        if not self._known_biz_ids:
+            # Birinchi ishga tushish - hamma ID larni yozib olish
+            self._known_biz_ids = current_ids
+            self._save_config()
+            logger.info(f"Admin: boshlang'ich {len(current_ids)} ta biznes kuzatuvga olindi")
+            return
+
+        if new_ids:
+            logger.info(f"Admin: {len(new_ids)} ta yangi biznes topildi: {new_ids}")
+            self._known_biz_ids = current_ids
+            self._save_config()
+            wait = self.config.get("wait_before_call", 60)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            await self._call_admin_new_business(len(new_ids))
 
     async def _call_admin_new_business(self, checking_count: int):
         phones = self._get_enabled_phones()

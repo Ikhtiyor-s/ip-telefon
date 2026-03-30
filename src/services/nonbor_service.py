@@ -122,22 +122,27 @@ class NonborService:
         return businesses
 
     async def get_checking_businesses(self) -> List[Dict]:
-        """CHECKING statusidagi bizneslarni olish"""
-        data = await self._make_request("GET", "seller/business/list/")
-        if not data:
-            return []
-        # Agar list qaytsa to'g'ridan, agar dict bo'lsa results/result dan
-        businesses = data if isinstance(data, list) else data.get("results", data.get("result", []))
-        # Faqat is_active=False (CHECKING) larni filtrlash
-        checking = [b for b in businesses if not b.get("is_active", True)]
-        return checking
+        """CHECKING statusidagi bizneslarni olish
+        Hozircha telegram_bot/businesses/checking/ endpoint ishlatiladi.
+        Agar endpoint mavjud bo'lmasa, bo'sh list qaytaradi.
+        """
+        # Avval checking endpoint ni sinab ko'rish
+        data = await self._make_request("GET", "telegram_bot/businesses/checking/")
+        if data and data.get("success"):
+            return data.get("result", [])
+        # Fallback - accepted larni qaytarish (yangi biznes kuzatish uchun)
+        return []
 
     async def get_checking_products_count(self) -> int:
         """CHECKING statusidagi mahsulotlar sonini olish"""
-        data = await self._make_request("GET", "products/?state=CHECKING&page_size=1")
-        if not data:
-            return 0
-        return data.get("count", 0)
+        data = await self._make_request("GET", "telegram_bot/products/checking/count/")
+        if data and isinstance(data, dict):
+            return data.get("count", data.get("result", 0))
+        return 0
+
+    async def get_all_businesses(self) -> List[Dict]:
+        """Barcha bizneslarni olish (accepted) - yangi biznes kuzatish uchun"""
+        return await self.get_businesses()
 
     async def get_business_by_id(self, biz_id: int) -> Optional[Dict]:
         """Biznes ID bo'yicha biznes ma'lumotlarini olish"""
