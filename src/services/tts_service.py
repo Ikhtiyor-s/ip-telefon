@@ -47,8 +47,36 @@ PLANNED_MESSAGES = {
     "zh": "您好！Nonbor来电提醒。您有一个计划订单，请准备好您的订单。",
 }
 
+# Admin: yangi biznes qo'ng'iroq xabarlari
+ADMIN_NEW_BUSINESS_MESSAGES = {
+    "uz": "Assalomu alaykum! Nonbor platformasida yangi biznes ochildi. Hozirda {count} ta restoran tekshiruv holatida.",
+    "ru": "Здравствуйте! На платформе Нонбо́р зарегистрирован новый бизнес. Сейчас {count} ресторанов на проверке.",
+    "en": "Hello! A new business has registered on Nonbor. Currently {count} restaurants are in checking status.",
+    "zh": "您好！Nonbor平台有新商家注册。目前有{count}家餐厅正在审核中。",
+}
+
+# Admin: kunlik hisobot xabarlari
+ADMIN_DAILY_REPORT_MESSAGES = {
+    "uz": "Assalomu alaykum! Nonbor kunlik hisobot. Hozirda {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
+    "ru": "Здравствуйте! Ежедневный отчёт Нонбо́р. Сейчас {biz_count} бизнесов и {product_count} товаров на проверке.",
+    "en": "Hello! Nonbor daily report. Currently {biz_count} businesses and {product_count} products are in checking status.",
+    "zh": "您好！Nonbor每日报告。目前有{biz_count}个商家和{product_count}个产品正在审核中。",
+}
+
 # Oldindan yaratiladigan maksimal buyurtma soni
 MAX_PREGENERATE = 30
+
+
+def _admin_new_business_text(count: int, lang: str) -> str:
+    lang = (lang or DEFAULT_LANG).lower()
+    template = ADMIN_NEW_BUSINESS_MESSAGES.get(lang) or ADMIN_NEW_BUSINESS_MESSAGES[DEFAULT_LANG]
+    return template.format(count=count)
+
+
+def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> str:
+    lang = (lang or DEFAULT_LANG).lower()
+    template = ADMIN_DAILY_REPORT_MESSAGES.get(lang) or ADMIN_DAILY_REPORT_MESSAGES[DEFAULT_LANG]
+    return template.format(biz_count=biz_count, product_count=product_count)
 
 
 def _order_message_text(count: int, lang: str) -> str:
@@ -265,6 +293,22 @@ class TTSService:
         if lang not in LANG_VOICES:
             lang = DEFAULT_LANG
         return await self._synthesize_with_cache(_planned_message_text(lang), lang)
+
+    async def generate_admin_new_business(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
+        """Admin: yangi biznes ochildi, N ta restoran tekshiruvda"""
+        lang = (lang or DEFAULT_LANG).lower()
+        if lang not in LANG_VOICES:
+            lang = DEFAULT_LANG
+        text = _admin_new_business_text(count, lang)
+        return await self._synthesize_with_cache(text, lang)
+
+    async def generate_admin_daily_report(self, biz_count: int, product_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
+        """Admin: kunlik hisobot - N biznes, M mahsulot tekshiruvda"""
+        lang = (lang or DEFAULT_LANG).lower()
+        if lang not in LANG_VOICES:
+            lang = DEFAULT_LANG
+        text = _admin_daily_report_text(biz_count, product_count, lang)
+        return await self._synthesize_with_cache(text, lang)
 
     def get_audio_path(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Mavjud audio faylni olish (agar cache da bo'lsa)"""

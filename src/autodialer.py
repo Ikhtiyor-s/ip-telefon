@@ -327,6 +327,16 @@ class AutodialerPro:
             self.notification_manager = None
             self.stats_handler = None
 
+        # Admin qo'ng'iroq servisi
+        from services import AdminCallService
+        self.admin_call_service = AdminCallService(
+            tts=self.tts,
+            call_manager=self.call_manager,
+            nonbor=self.nonbor,
+            skip_asterisk=self.skip_asterisk,
+            data_dir=data_dir,
+        )
+
         # HTTP API server (admin panel uchun)
         api_port = int(os.getenv("API_PORT", "8585"))
         self.api_server = AutodialerAPI(autodialer=self, port=api_port)
@@ -675,6 +685,10 @@ class AutodialerPro:
         else:
             logger.info("TTS o'tkazib yuborildi (Asterisk o'chirilgan)")
 
+        # Admin qo'ng'iroq servisi
+        logger.info("Admin qo'ng'iroq servisi boshlash...")
+        await self.admin_call_service.start()
+
         # Asosiy loop
         logger.info("=" * 60)
         logger.info("AUTODIALER PRO ISHLAYAPTI")
@@ -702,6 +716,7 @@ class AutodialerPro:
             task.cancel()
 
         # Servislarni yopish
+        await self.admin_call_service.stop()
         await self.nonbor_poller.stop()
         if self.stats_handler:
             await self.stats_handler.stop_polling()

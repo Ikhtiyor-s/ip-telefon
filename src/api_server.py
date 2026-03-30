@@ -124,6 +124,13 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/health", self.health)
         # AI trigger — biznes ID bo'yicha qo'ng'iroq
         r.add_post("/api/autodialer/call-business", self.call_business)
+        # Admin call management
+        r.add_get("/api/autodialer/admin-call/config", self.get_admin_call_config)
+        r.add_post("/api/autodialer/admin-call/config", self.update_admin_call_config)
+        r.add_get("/api/autodialer/admin-call/phones", self.get_admin_phones)
+        r.add_post("/api/autodialer/admin-call/phones", self.add_admin_phone)
+        r.add_delete("/api/autodialer/admin-call/phones/{phone}", self.remove_admin_phone)
+        r.add_post("/api/autodialer/admin-call/test", self.test_admin_call)
         # OPTIONS preflight uchun
         r.add_route("OPTIONS", "/{path:.*}", self._options_handler)
 
@@ -860,6 +867,68 @@ class AutodialerAPI:
             return self._ok(result)
         else:
             return self._err(result.get("error", "Noma'lum xato"))
+
+    # ===== ADMIN CALL =====
+
+    @property
+    def _admin_svc(self):
+        return self.autodialer.admin_call_service if self.autodialer else None
+
+    async def get_admin_call_config(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        return self._ok(self._admin_svc.get_config())
+
+    async def update_admin_call_config(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._err("JSON parse xatosi")
+        self._admin_svc.update_config(body)
+        return self._ok(self._admin_svc.get_config())
+
+    async def get_admin_phones(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        return self._ok(self._admin_svc.get_admin_phones())
+
+    async def add_admin_phone(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._err("JSON parse xatosi")
+        phone = body.get("phone", "").strip()
+        name = body.get("name", "").strip()
+        if not phone:
+            return self._err("phone maydoni kerak")
+        if self._admin_svc.add_admin_phone(phone, name):
+            return self._ok(self._admin_svc.get_admin_phones())
+        return self._err("Bu raqam allaqachon mavjud")
+
+    async def remove_admin_phone(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        phone = request.match_info.get("phone", "")
+        if self._admin_svc.remove_admin_phone(phone):
+            return self._ok(self._admin_svc.get_admin_phones())
+        return self._err("Raqam topilmadi")
+
+    async def test_admin_call(self, request):
+        if not self._admin_svc:
+            return self._err("Servis mavjud emas", status=503)
+        try:
+            body = await request.json()
+            lang = body.get("lang")
+        except Exception:
+            lang = None
+        result = await self._admin_svc.test_call(lang=lang)
+        if result.get("success"):
+            return self._ok(result)
+        return self._err(result.get("error", "Xato"))
 
     # ===== HEALTH =====
 
