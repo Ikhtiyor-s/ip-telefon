@@ -72,7 +72,7 @@ class NonborService:
         self._session = None
         logger.info("HTTP session qayta yaratildi (stale connection fix)")
 
-    async def _make_request(self, method: str, endpoint: str) -> Optional[dict]:
+    async def _make_request(self, method: str, endpoint: str, params: dict = None) -> Optional[dict]:
         """API so'rov yuborish"""
         # 10 ta ketma-ket xatodan keyin session ni qayta yaratish
         if self._consecutive_errors > 0 and self._consecutive_errors % 10 == 0:
@@ -83,7 +83,7 @@ class NonborService:
         timeout = aiohttp.ClientTimeout(total=15)
 
         try:
-            async with session.request(method, url, timeout=timeout) as response:
+            async with session.request(method, url, params=params, timeout=timeout) as response:
                 if response.status == 200:
                     self._consecutive_errors = 0  # Muvaffaqiyatli - reset
                     return await response.json()
@@ -122,23 +122,31 @@ class NonborService:
         return businesses
 
     async def get_checking_businesses(self) -> List[Dict]:
-        """CHECKING statusidagi bizneslarni olish
-        Hozircha telegram_bot/businesses/checking/ endpoint ishlatiladi.
-        Agar endpoint mavjud bo'lmasa, bo'sh list qaytaradi.
-        """
-        # Avval checking endpoint ni sinab ko'rish
-        data = await self._make_request("GET", "telegram_bot/businesses/checking/")
-        if data and data.get("success"):
-            return data.get("result", [])
-        # Fallback - accepted larni qaytarish (yangi biznes kuzatish uchun)
-        return []
+        """CHECKING statusidagi bizneslarni olish — business/list2/ dan filtrlash"""
+        data = await self._make_request("GET", "business/list2/", params={"page_size": 100})
+        if not data:
+            return []
+        results = data.get("result", data)
+        if isinstance(results, dict):
+            results = results.get("results", [])
+        return [b for b in results if b.get("state") == "CHECKING"]
 
     async def get_checking_products_count(self) -> int:
-        """CHECKING statusidagi mahsulotlar sonini olish"""
-        data = await self._make_request("GET", "telegram_bot/products/checking/count/")
-        if data and isinstance(data, dict):
-            return data.get("count", data.get("result", 0))
-        return 0
+        """CHECKING statusidagi mahsulotlar sonini olish — har bir CHECKING biznesning mahsulotlarini sanash"""
+        checking = await self.get_checking_businesses()
+        if not checking:
+            return 0
+        total = 0
+        for biz in checking:
+            biz_id = biz.get("id")
+            if not biz_id:
+                continue
+            data = await self._make_request("GET", f"business/{biz_id}/products-by-category/", params={"page_size": 100})
+            if data and isinstance(data, list):
+                for cat in data:
+                    products = cat.get("products", [])
+                    total += len(products)
+        return total
 
     async def get_all_businesses(self) -> List[Dict]:
         """Barcha bizneslarni olish (accepted) - yangi biznes kuzatish uchun"""
