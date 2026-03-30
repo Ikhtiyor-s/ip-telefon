@@ -63,6 +63,14 @@ ADMIN_DAILY_REPORT_MESSAGES = {
     "zh": "您好！Nonbor每日报告。目前有{biz_count}个商家和{product_count}个产品正在审核中。",
 }
 
+# Admin: ertalabki hisobot — tunda yangi bizneslar bor
+ADMIN_MORNING_REPORT_MESSAGES = {
+    "uz": "Assalomu alaykum! Nonbor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Hozirda jami {biz_count} ta biznes platformada.",
+    "ru": "Здравствуйте! Утренний отчёт Нонбор. За ночь добавлено {night_count} новых бизнесов. Всего на платформе {biz_count} бизнесов.",
+    "en": "Hello! Nonbor morning report. {night_count} new businesses were added overnight. Currently {biz_count} businesses on the platform.",
+    "zh": "您好！Nonbor早报。夜间新增{night_count}个商家。平台目前共有{biz_count}个商家。",
+}
+
 # Oldindan yaratiladigan maksimal buyurtma soni
 MAX_PREGENERATE = 30
 
@@ -338,6 +346,15 @@ class TTSService:
         if lang not in LANG_VOICES:
             lang = DEFAULT_LANG
         text = _admin_new_business_text(count, lang)
+        return await self._synthesize_with_cache(text, lang)
+
+    async def generate_admin_morning_report(self, biz_count: int, night_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
+        """Admin: ertalabki hisobot — tunda yangi bizneslar soni"""
+        lang = (lang or DEFAULT_LANG).lower()
+        if lang not in LANG_VOICES:
+            lang = DEFAULT_LANG
+        template = ADMIN_MORNING_REPORT_MESSAGES.get(lang) or ADMIN_MORNING_REPORT_MESSAGES[DEFAULT_LANG]
+        text = template.format(biz_count=biz_count, night_count=night_count)
         return await self._synthesize_with_cache(text, lang)
 
     async def generate_admin_daily_report(self, biz_count: int, product_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:

@@ -25,6 +25,8 @@ DEFAULT_CONFIG = {
     "daily_report_language": "uz",
     "new_business_call_enabled": True,
     "new_business_call_language": "uz",
+    "work_hours_start": "08:00",
+    "work_hours_end": "22:00",
     "known_checking_biz_ids": [],
 }
 
@@ -47,6 +49,7 @@ class AdminCallService:
         self._check_task: Optional[asyncio.Task] = None
         self._daily_task: Optional[asyncio.Task] = None
         self._running = False
+        self._night_new_count = 0  # Tunda topilgan yangi bizneslar soni
 
         logger.info(f"AdminCallService yaratildi: {len(self.config['admin_phones'])} ta admin raqam")
 
@@ -75,10 +78,26 @@ class AdminCallService:
     def get_config(self) -> dict:
         return {k: v for k, v in self.config.items() if k != "known_checking_biz_ids"}
 
+    def _is_work_hours(self) -> bool:
+        """Ish vaqtida ekanligini tekshirish"""
+        now = datetime.now()
+        start_str = self.config.get("work_hours_start", "08:00")
+        end_str = self.config.get("work_hours_end", "22:00")
+        try:
+            sh, sm = map(int, start_str.split(":"))
+            eh, em = map(int, end_str.split(":"))
+            start_min = sh * 60 + sm
+            end_min = eh * 60 + em
+            now_min = now.hour * 60 + now.minute
+            return start_min <= now_min < end_min
+        except Exception:
+            return True  # Xato bo'lsa doim ishlaydi
+
     def update_config(self, updates: dict):
         for key in ["call_mode", "wait_before_call", "max_call_attempts", "retry_interval",
                      "daily_report_enabled", "daily_report_time", "daily_report_language",
-                     "new_business_call_enabled", "new_business_call_language"]:
+                     "new_business_call_enabled", "new_business_call_language",
+                     "work_hours_start", "work_hours_end"]:
             if key in updates:
                 self.config[key] = updates[key]
         self._save_config()
@@ -148,7 +167,6 @@ class AdminCallService:
             return
 
         if not self._known_biz_ids:
-            # Birinchi ishga tushish - hamma ID larni yozib olish
             self._known_biz_ids = current_ids
             self._save_config()
             logger.info(f"Admin: boshlang'ich {len(current_ids)} ta biznes kuzatuvga olindi")
@@ -160,15 +178,19 @@ class AdminCallService:
             self._known_biz_ids = current_ids
             self._save_config()
 
+            # Ish vaqtini tekshirish
+            if not self._is_work_hours():
+                self._night_new_count += len(new_ids)
+                logger.info(f"Admin: ish vaqti emas, tunda {self._night_new_count} ta yangi biznes to'plandi")
+                return
+
             wait = self.config.get("wait_before_call", 60)
             if wait > 0:
                 logger.info(f"Admin: {wait}s kutish...")
                 await asyncio.sleep(wait)
 
-            # Hozirgi accepted bizneslar soni bilan qo'ng'iroq
             await self._call_admin_new_business(len(current_ids))
         else:
-            # O'chirilgan bizneslarni yangilash
             if current_ids != self._known_biz_ids:
                 self._known_biz_ids = current_ids
                 self._save_config()
@@ -223,17 +245,26 @@ class AdminCallService:
             logger.warning("Admin: kunlik hisobot - raqamlar yo'q")
             return
 
-        # Ma'lumotlar olish - accepted bizneslar soni
+        # Accepted bizneslar soni
         biz_count = await self.nonbor.get_accepted_business_count()
-        product_count = 0  # CHECKING product API bot secret bilan ishlamaydi
+
+        # Tundagi yangi bizneslar ham hisobotga qo'shiladi
+        night_count = self._night_new_count
+        self._night_new_count = 0  # Reset
 
         lang = self.config.get("daily_report_language", "uz")
-        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+
+        if night_count > 0:
+            # Tunda yangi bizneslar bor — maxsus xabar
+            audio = await self.tts.generate_admin_morning_report(biz_count, night_count, lang=lang)
+        else:
+            audio = await self.tts.generate_admin_daily_report(biz_count, 0, lang=lang)
+
         if not audio:
             logger.error("Admin: kunlik hisobot TTS xatosi")
             return
 
-        logger.info(f"Admin kunlik hisobot: {biz_count} biznes, {product_count} mahsulot tekshiruvda")
+        logger.info(f"Admin kunlik hisobot: {biz_count} biznes, tundagi yangi: {night_count}")
         await self._call_admins(str(audio), "kunlik_hisobot")
 
     # ── Qo'ng'iroq logikasi ──
