@@ -103,6 +103,9 @@ class AdminCallService:
         self._save_config()
         logger.info(f"Admin config yangilandi: {updates}")
 
+        # Tasklar avtomatik qayta boshlanishi
+        asyncio.ensure_future(self._restart_tasks())
+
     def add_admin_phone(self, phone: str, name: str = "") -> bool:
         phones = self.config["admin_phones"]
         for p in phones:
@@ -133,18 +136,51 @@ class AdminCallService:
 
     async def start(self):
         self._running = True
+        await self._start_tasks()
+
+    async def _start_tasks(self):
+        """Configga qarab tasklar boshlash"""
         if self.config.get("new_business_call_enabled", True):
-            self._check_task = asyncio.create_task(self._business_check_loop())
-            logger.info("Admin: yangi biznes tekshirish boshlandi")
+            if not self._check_task or self._check_task.done():
+                self._check_task = asyncio.create_task(self._business_check_loop())
+                logger.info("Admin: yangi biznes tekshirish boshlandi")
         if self.config.get("daily_report_enabled", False):
+            if not self._daily_task or self._daily_task.done():
+                self._daily_task = asyncio.create_task(self._daily_report_loop())
+                logger.info(f"Admin: kunlik hisobot boshlandi ({self.config['daily_report_time']})")
+
+    def _stop_task(self, task):
+        if task and not task.done():
+            task.cancel()
+
+    async def _restart_tasks(self):
+        """Config o'zgarganda tasklar qayta boshlash"""
+        # Yangi biznes tekshirish
+        if self.config.get("new_business_call_enabled", True):
+            if not self._check_task or self._check_task.done():
+                self._check_task = asyncio.create_task(self._business_check_loop())
+                logger.info("Admin: yangi biznes tekshirish YOQILDI")
+        else:
+            if self._check_task and not self._check_task.done():
+                self._check_task.cancel()
+                logger.info("Admin: yangi biznes tekshirish O'CHIRILDI")
+
+        # Kunlik hisobot
+        if self.config.get("daily_report_enabled", False):
+            # Vaqt o'zgarganda qayta boshlash kerak
+            if self._daily_task and not self._daily_task.done():
+                self._daily_task.cancel()
             self._daily_task = asyncio.create_task(self._daily_report_loop())
-            logger.info(f"Admin: kunlik hisobot boshlandi ({self.config['daily_report_time']})")
+            logger.info(f"Admin: kunlik hisobot YANGILANDI ({self.config['daily_report_time']})")
+        else:
+            if self._daily_task and not self._daily_task.done():
+                self._daily_task.cancel()
+                logger.info("Admin: kunlik hisobot O'CHIRILDI")
 
     async def stop(self):
         self._running = False
-        for task in [self._check_task, self._daily_task]:
-            if task and not task.done():
-                task.cancel()
+        self._stop_task(self._check_task)
+        self._stop_task(self._daily_task)
 
     # ── Yangi biznes tekshirish ──
 
