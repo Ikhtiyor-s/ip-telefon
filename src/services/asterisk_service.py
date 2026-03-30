@@ -220,27 +220,26 @@ class AsteriskAMI:
         self._writer.write(message.encode())
         await self._writer.drain()
 
-        # Javobni to'g'ridan-to'g'ri o'qish
+        # Login javobini o'qish
         try:
-            buffer = ""
-            while True:
-                data = await asyncio.wait_for(self._reader.read(4096), timeout=10)
-                if not data:
-                    break
-                buffer += data.decode()
+            # Kichik kutish — Asterisk Login response + FullyBooted eventni yuboradi
+            await asyncio.sleep(1)
+            data = await asyncio.wait_for(self._reader.read(8192), timeout=10)
+            if not data:
+                logger.error("AMI login: bo'sh javob")
+                return False
 
-                if "\r\n\r\n" in buffer:
-                    # Response ni parse qilish
-                    for line in buffer.split("\r\n"):
-                        if line.startswith("Response:"):
-                            response_value = line.split(": ", 1)[1] if ": " in line else ""
-                            if response_value == "Success":
-                                logger.debug("AMI login muvaffaqiyatli")
-                                return True
-                            else:
-                                logger.error(f"AMI login rad etildi: {response_value}")
-                                return False
-                    break
+            text = data.decode('utf-8', errors='ignore')
+            logger.debug(f"AMI login javob: {len(data)} bayt")
+
+            if "Response: Success" in text:
+                logger.info("AMI login muvaffaqiyatli")
+                # Qolgan ma'lumotlar (FullyBooted va h.k.) uchun
+                # _read_events da read() bilan davom etamiz
+                return True
+            else:
+                logger.error(f"AMI login rad etildi: {text[:200]}")
+                return False
 
         except asyncio.TimeoutError:
             logger.error("AMI login timeout")
@@ -248,8 +247,6 @@ class AsteriskAMI:
         except Exception as e:
             logger.error(f"AMI login xatosi: {e}")
             return False
-
-        return False
 
     async def _ping_loop(self):
         """AMI ulanishni faol tutish uchun ping yuborish"""
@@ -287,8 +284,13 @@ class AsteriskAMI:
         self._pending_actions[action_id] = future
 
         # Yuborish
-        self._writer.write(message.encode())
-        await self._writer.drain()
+        try:
+            self._writer.write(message.encode())
+            await self._writer.drain()
+        except Exception as e:
+            logger.error(f"AMI write xatosi: {e}")
+            self._pending_actions.pop(action_id, None)
+            return None
 
         # Javob kutish
         try:
@@ -300,12 +302,12 @@ class AsteriskAMI:
             return None
 
     async def _read_events(self):
-        """AMI eventlarni o'qish"""
+        """AMI eventlarni o'qish — qatorma-qator"""
+        logger.debug("AMI _read_events boshlandi")
         buffer = ""
 
         while self._connected:
             try:
-                # Timeout bilan o'qish (60 soniya - ping har 30s yuboriladi)
                 data = await asyncio.wait_for(
                     self._reader.read(4096),
                     timeout=60.0
@@ -324,15 +326,9 @@ class AsteriskAMI:
                     await self._handle_message(message)
 
             except asyncio.TimeoutError:
-                # Read timeout - bu oddiy hodisa, davom etamiz
-                logger.debug("AMI read timeout (60s) - davom etmoqda")
                 continue
             except asyncio.CancelledError:
-                logger.debug("AMI read task bekor qilindi")
                 break
-            except UnicodeDecodeError as e:
-                logger.error(f"AMI decode xatosi: {e}")
-                continue
             except Exception as e:
                 logger.error(f"AMI read xatosi: {e}", exc_info=True)
                 self._connected = False

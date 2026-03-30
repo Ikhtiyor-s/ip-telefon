@@ -310,18 +310,37 @@ class AdminCallService:
     # ── Test qo'ng'iroq ──
 
     async def test_call(self, lang: str = None) -> dict:
-        """Test qo'ng'iroq - admin raqamlarga"""
+        """Test qo'ng'iroq - haqiqiy CHECKING ma'lumotlar bilan"""
         phones = self._get_enabled_phones()
         if not phones:
             return {"success": False, "error": "Admin raqamlar yo'q"}
 
         lang = lang or self.config.get("new_business_call_language", "uz")
-        audio = await self.tts.generate_admin_new_business(1, lang=lang)
+
+        # Haqiqiy CHECKING bizneslar va mahsulotlar sonini olish
+        try:
+            checking_biz = await self.nonbor.get_checking_businesses()
+            biz_count = len(checking_biz)
+            product_count = await self.nonbor.get_checking_products_count()
+        except Exception as e:
+            logger.warning(f"Test call: CHECKING ma'lumotlar olishda xato: {e}")
+            biz_count = 0
+            product_count = 0
+
+        # Hech narsa yo'q bo'lsa qo'ng'iroq qilmaslik
+        if biz_count == 0 and product_count == 0:
+            return {"success": False, "error": "Tekshiruvda hech narsa yo'q, qo'ng'iroq kerak emas",
+                    "biz_count": 0, "product_count": 0}
+
+        # Kunlik hisobot formatida aytish (biznes + mahsulot soni bilan)
+        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}
 
         if self.skip_asterisk:
-            return {"success": True, "message": "Skip asterisk rejimda", "phones": phones}
+            return {"success": True, "message": "Skip asterisk rejimda", "phones": phones,
+                    "biz_count": biz_count, "product_count": product_count}
 
         await self._call_admins(str(audio), "test")
-        return {"success": True, "phones": phones}
+        return {"success": True, "phones": phones,
+                "biz_count": biz_count, "product_count": product_count}

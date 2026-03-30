@@ -50,15 +50,15 @@ PLANNED_MESSAGES = {
 # Admin: yangi biznes qo'ng'iroq xabarlari
 ADMIN_NEW_BUSINESS_MESSAGES = {
     "uz": "Assalomu alaykum! Nonbor platformasida yangi biznes ochildi. Hozirda {count} ta restoran tekshiruv holatida.",
-    "ru": "Здравствуйте! На платформе Нонбо́р зарегистрирован новый бизнес. Сейчас {count} ресторанов на проверке.",
+    "ru": "Здравствуйте! Звонит платформа Нонбор. Зарегистрирован новый бизнес. Сейчас {count} ресторанов на проверке.",
     "en": "Hello! A new business has registered on Nonbor. Currently {count} restaurants are in checking status.",
     "zh": "您好！Nonbor平台有新商家注册。目前有{count}家餐厅正在审核中。",
 }
 
 # Admin: kunlik hisobot xabarlari
 ADMIN_DAILY_REPORT_MESSAGES = {
-    "uz": "Assalomu alaykum! Nonbor kunlik hisobot. Hozirda {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
-    "ru": "Здравствуйте! Ежедневный отчёт Нонбо́р. Сейчас {biz_count} бизнесов и {product_count} товаров на проверке.",
+    "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
+    "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {biz_count} бизнесов и {product_count} товаров на проверке.",
     "en": "Hello! Nonbor daily report. Currently {biz_count} businesses and {product_count} products are in checking status.",
     "zh": "您好！Nonbor每日报告。目前有{biz_count}个商家和{product_count}个产品正在审核中。",
 }
@@ -75,6 +75,32 @@ def _admin_new_business_text(count: int, lang: str) -> str:
 
 def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> str:
     lang = (lang or DEFAULT_LANG).lower()
+
+    # Ikkalasi 0 — bu funksiya chaqirilmasligi kerak, lekin ehtiyot uchun
+    if biz_count == 0 and product_count == 0:
+        return ""
+
+    # Faqat biznes bor
+    if product_count == 0:
+        biz_only = {
+            "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {biz_count} ta biznes tekshiruv holatida.",
+            "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {biz_count} бизнесов на проверке.",
+            "en": "Hello! Nonbor report. Currently {biz_count} businesses are in checking status.",
+            "zh": "您好！Nonbor报告。目前有{biz_count}个商家正在审核中。",
+        }
+        return (biz_only.get(lang) or biz_only[DEFAULT_LANG]).format(biz_count=biz_count)
+
+    # Faqat mahsulot bor
+    if biz_count == 0:
+        prod_only = {
+            "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {product_count} ta mahsulot tekshiruv holatida.",
+            "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {product_count} товаров на проверке.",
+            "en": "Hello! Nonbor report. Currently {product_count} products are in checking status.",
+            "zh": "您好！Nonbor报告。目前有{product_count}个产品正在审核中。",
+        }
+        return (prod_only.get(lang) or prod_only[DEFAULT_LANG]).format(product_count=product_count)
+
+    # Ikkalasi ham bor
     template = ADMIN_DAILY_REPORT_MESSAGES.get(lang) or ADMIN_DAILY_REPORT_MESSAGES[DEFAULT_LANG]
     return template.format(biz_count=biz_count, product_count=product_count)
 
@@ -160,15 +186,17 @@ class GoogleTTSProvider(BaseTTSProvider):
 class EdgeTTSProvider(BaseTTSProvider):
     """Microsoft Edge TTS - Bepul va sifatli"""
 
-    def __init__(self, voice: str = "uz-UZ-MadinaNeural"):
+    def __init__(self, voice: str = "uz-UZ-MadinaNeural", rate: str = "+2%", pitch: str = "+7Hz"):
         self.voice = voice
+        self.rate = rate
+        self.pitch = pitch
 
     async def synthesize(self, text: str, output_path: Path) -> bool:
         """Edge TTS orqali ovoz yaratish"""
         try:
             import edge_tts
 
-            communicate = edge_tts.Communicate(text, self.voice)
+            communicate = edge_tts.Communicate(text, self.voice, rate=self.rate, pitch=self.pitch)
 
             mp3_path = output_path.with_suffix(".mp3")
             await communicate.save(str(mp3_path))
@@ -243,7 +271,11 @@ class TTSService:
             if self.provider_type == "google":
                 self._providers[lang] = GoogleTTSProvider(language=lang)
             else:
-                self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang])
+                # O'zbek tili uchun speed/pitch sozlash
+                if lang == "uz":
+                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang], rate="+2%", pitch="+7Hz")
+                else:
+                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang])
             logger.info(f"TTS provider yaratildi: lang={lang}, voice={LANG_VOICES[lang]}")
         return self._providers[lang]
 
