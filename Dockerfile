@@ -23,24 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Non-root user yaratish (xavfsizlik)
-RUN useradd -m -u 1000 -s /bin/bash appuser
-
 # Application code
 COPY src/ ./src/
 COPY config/ ./config/
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 # Create directories va ruxsatlar
-# audio/cache papkasiga 777 - Asterisk konteyner ham o'qiy olishi uchun (shared volume)
 RUN mkdir -p audio/cache logs data && \
-    chmod -R 777 audio && \
-    chown -R appuser:appuser /app && \
     sed -i 's/\r//' /docker-entrypoint.sh && \
     chmod +x /docker-entrypoint.sh
-
-# Non-root user bilan ishlash
-USER appuser
 
 # Healthcheck - API server port 8585
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
