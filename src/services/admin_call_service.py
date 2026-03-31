@@ -283,28 +283,19 @@ class AdminCallService:
             logger.warning("Admin: kunlik hisobot - raqamlar yo'q")
             return
 
-        # Bizneslar va CHECKING mahsulotlar soni
-        biz_count = await self.nonbor.get_accepted_business_count()
+        # Faqat CHECKING ma'lumotlar
         product_count = await self.nonbor.get_checking_products_count()
-        logger.info(f"Kunlik hisobot: {biz_count} biznes, {product_count} checking mahsulot")
-
-        # Tundagi yangi bizneslar ham hisobotga qo'shiladi
-        night_count = self._night_new_count
-        self._night_new_count = 0  # Reset
+        # CHECKING bizneslar soni - API kelganda qo'shiladi, hozir 0
+        biz_count = 0
 
         lang = self.config.get("daily_report_language", "uz")
-
-        if night_count > 0:
-            # Tunda yangi bizneslar bor — maxsus xabar
-            audio = await self.tts.generate_admin_morning_report(biz_count, night_count, lang=lang)
-        else:
-            audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
 
         if not audio:
             logger.error("Admin: kunlik hisobot TTS xatosi")
             return
 
-        logger.info(f"Admin kunlik hisobot: {biz_count} biznes, {product_count} checking mahsulot, tundagi yangi: {night_count}")
+        logger.info(f"Admin kunlik hisobot: {product_count} checking mahsulot")
         await self._call_admins(str(audio), "kunlik_hisobot")
 
     # ── Qo'ng'iroq logikasi ──
@@ -374,24 +365,21 @@ class AdminCallService:
 
         lang = lang or self.config.get("new_business_call_language", "uz")
 
-        # Biznes va checking mahsulotlar sonini olish
+        # Faqat CHECKING ma'lumotlar
         try:
-            biz_count = await self.nonbor.get_accepted_business_count()
             product_count = await self.nonbor.get_checking_products_count()
         except Exception as e:
             logger.warning(f"Test call: ma'lumot olishda xato: {e}")
-            biz_count = 0
             product_count = 0
 
-        # Hisobot audio yaratish
-        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+        # Hisobot audio yaratish (biz_count=0 - CHECKING API kelganda qo'shiladi)
+        audio = await self.tts.generate_admin_daily_report(0, product_count, lang=lang)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}
 
         if self.skip_asterisk:
             return {"success": True, "message": "Skip asterisk rejimda", "phones": phones,
-                    "biz_count": biz_count, "checking_products": product_count}
+                    "checking_products": product_count}
 
         await self._call_admins(str(audio), "test")
-        return {"success": True, "phones": phones,
-                "biz_count": biz_count, "checking_products": product_count}
+        return {"success": True, "phones": phones, "checking_products": product_count}
