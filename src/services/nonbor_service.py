@@ -129,8 +129,9 @@ class NonborService:
         return []
 
     async def get_checking_products_count(self) -> int:
-        """CHECKING mahsulotlar soni - bot secret bilan olish imkoni yo'q."""
-        return 0
+        """CHECKING mahsulotlar soni - accepted bizneslardan checking_products_count yig'ish"""
+        businesses = await self.get_businesses()
+        return sum(b.get("checking_products_count", 0) for b in businesses)
 
     async def get_accepted_business_ids(self) -> set:
         """Accepted bizneslar ID lari - yangi biznes kuzatish uchun"""
