@@ -252,7 +252,6 @@ class AdminCallService:
         """Har kuni belgilangan vaqtda hisobot qo'ng'iroq"""
         while self._running:
             try:
-                # Keyingi hisobot vaqtini hisoblash
                 now = datetime.now()
                 time_str = self.config.get("daily_report_time", "08:00")
                 hour, minute = map(int, time_str.split(":"))
@@ -265,14 +264,17 @@ class AdminCallService:
                 await asyncio.sleep(wait_seconds)
 
                 if not self._running:
+                    logger.info("Admin: kunlik hisobot - servis to'xtatilgan")
                     break
 
+                logger.info("Admin: kunlik hisobot vaqti keldi, yuborilmoqda...")
                 await self._send_daily_report()
 
             except asyncio.CancelledError:
+                logger.info("Admin: kunlik hisobot task bekor qilindi")
                 break
             except Exception as e:
-                logger.error(f"Admin kunlik hisobot xatosi: {e}")
+                logger.error(f"Admin kunlik hisobot xatosi: {e}", exc_info=True)
                 await asyncio.sleep(60)
 
     async def _send_daily_report(self):
