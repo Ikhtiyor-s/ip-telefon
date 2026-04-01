@@ -73,7 +73,7 @@ ADMIN_MORNING_REPORT_MESSAGES = {
 }
 
 # Oldindan yaratiladigan maksimal buyurtma soni
-MAX_PREGENERATE = 30
+MAX_PREGENERATE = 50
 
 
 def _admin_new_business_text(count: int, lang: str) -> str:
