@@ -197,20 +197,20 @@ class AdminCallService:
             await asyncio.sleep(30)
 
     async def _check_new_businesses(self):
-        """Accepted bizneslar kuzatish - yangi biznes qo'shilganda adminga qo'ng'iroq"""
-        current_ids = await self.nonbor.get_accepted_business_ids()
-        if not current_ids:
-            return
+        """CHECKING bizneslarni kuzatish - yangi CHECKING biznes qo'shilganda adminga qo'ng'iroq"""
+        checking = await self.nonbor.get_checking_businesses()
+        current_ids = {b.get("id") for b in checking if b.get("id")}
 
         if not self._known_biz_ids:
+            # Birinchi ishga tushish - hozirgi CHECKING larni yozib olish
             self._known_biz_ids = current_ids
             self._save_config()
-            logger.info(f"Admin: boshlang'ich {len(current_ids)} ta biznes kuzatuvga olindi")
+            logger.info(f"Admin: boshlang'ich {len(current_ids)} ta CHECKING biznes kuzatuvga olindi")
             return
 
         new_ids = current_ids - self._known_biz_ids
         if new_ids:
-            logger.info(f"Admin: {len(new_ids)} ta yangi biznes topildi: {new_ids}")
+            logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes topildi: {new_ids}")
             self._known_biz_ids = current_ids
             self._save_config()
 
