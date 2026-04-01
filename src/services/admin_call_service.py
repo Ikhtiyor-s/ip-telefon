@@ -187,13 +187,15 @@ class AdminCallService:
     async def _business_check_loop(self):
         """Har 30s da CHECKING bizneslarni tekshirish"""
         await asyncio.sleep(10)  # Startup kutish
+        logger.info("Admin: check loop boshlandi")
         while self._running:
             try:
                 await self._check_new_businesses()
             except asyncio.CancelledError:
+                logger.info("Admin: check loop bekor qilindi")
                 break
             except Exception as e:
-                logger.error(f"Admin biznes tekshirish xatosi: {e}")
+                logger.error(f"Admin biznes tekshirish xatosi: {e}", exc_info=True)
             await asyncio.sleep(30)
 
     async def _check_new_businesses(self):
