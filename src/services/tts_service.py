@@ -56,12 +56,12 @@ ADMIN_NEW_BUSINESS_MESSAGES = {
 }
 
 # Admin: kunlik hisobot xabarlari
-# biz_count = tasdiqlangan bizneslar, product_count = tekshiruvdagi mahsulotlar
+# biz_count = tekshiruvdagi bizneslar, product_count = tekshiruvdagi mahsulotlar
 ADMIN_DAILY_REPORT_MESSAGES = {
-    "uz": "Assalomu alaykum! Nonbor hisoboti. Platformada {biz_count} ta tasdiqlangan biznes bor. {product_count} ta mahsulot tekshiruv holatida.",
-    "ru": "Здравствуйте! Отчёт Нонбо́р. На платформе {biz_count} подтверждённых бизнесов. {product_count} товаров на проверке.",
-    "en": "Hello! Nonbor report. {biz_count} approved businesses on the platform. {product_count} products are in checking status.",
-    "zh": "您好！Nonbor报告。平台有{biz_count}个已通过商家。{product_count}个产品待审核。",
+    "uz": "Assalomu alaykum! Nonbor hisoboti. {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
+    "ru": "Здравствуйте! Отчёт Нонбо́р. {biz_count} бизнесов и {product_count} товаров на проверке.",
+    "en": "Hello! Nonbor report. {biz_count} businesses and {product_count} products are in checking status.",
+    "zh": "您好！Nonbor报告。{biz_count}个商家和{product_count}个产品待审核。",
 }
 
 # Admin: ertalabki hisobot — tunda yangi bizneslar bor
@@ -98,10 +98,10 @@ def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> s
     # Faqat biznes bor, mahsulot yo'q
     if product_count == 0:
         biz_only = {
-            "uz": "Assalomu alaykum! Nonbor hisoboti. Platformada {biz_count} ta tasdiqlangan biznes bor. Tekshiruvda mahsulot yo'q.",
-            "ru": "Здравствуйте! Отчёт Нонбо́р. На платформе {biz_count} подтверждённых бизнесов. Товаров на проверке нет.",
-            "en": "Hello! Nonbor report. {biz_count} approved businesses on the platform. No products in checking.",
-            "zh": "您好！Nonbor报告。平台有{biz_count}个已通过商家。无待审核产品。",
+            "uz": "Assalomu alaykum! Nonbor hisoboti. {biz_count} ta biznes tekshiruv holatida. Tekshiruvda mahsulot yo'q.",
+            "ru": "Здравствуйте! Отчёт Нонбо́р. {biz_count} бизнесов на проверке. Товаров на проверке нет.",
+            "en": "Hello! Nonbor report. {biz_count} businesses in checking. No products in checking.",
+            "zh": "您好！Nonbor报告。{biz_count}个商家待审核。无待审核产品。",
         }
         return (biz_only.get(lang) or biz_only[DEFAULT_LANG]).format(biz_count=biz_count)
 

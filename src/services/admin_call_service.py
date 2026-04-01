@@ -283,11 +283,12 @@ class AdminCallService:
             logger.warning("Admin: kunlik hisobot - raqamlar yo'q")
             return
 
-        # Faqat CHECKING mahsulotlar
+        # CHECKING bizneslar va mahsulotlar
+        biz_count = await self.nonbor.get_checking_businesses_count()
         product_count = await self.nonbor.get_checking_products_count()
 
         lang = self.config.get("daily_report_language", "uz")
-        audio = await self.tts.generate_admin_daily_report(0, product_count, lang=lang)
+        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
 
         if not audio:
             logger.error("Admin: kunlik hisobot TTS xatosi")
@@ -365,18 +366,21 @@ class AdminCallService:
 
         # Faqat CHECKING ma'lumotlar
         try:
+            biz_count = await self.nonbor.get_checking_businesses_count()
             product_count = await self.nonbor.get_checking_products_count()
         except Exception as e:
             logger.warning(f"Test call: ma'lumot olishda xato: {e}")
+            biz_count = 0
             product_count = 0
 
-        audio = await self.tts.generate_admin_daily_report(0, product_count, lang=lang)
+        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}
 
         if self.skip_asterisk:
             return {"success": True, "message": "Skip asterisk rejimda", "phones": phones,
-                    "checking_products": product_count}
+                    "checking_biz": biz_count, "checking_products": product_count}
 
         await self._call_admins(str(audio), "test")
-        return {"success": True, "phones": phones, "checking_products": product_count}
+        return {"success": True, "phones": phones,
+                "checking_biz": biz_count, "checking_products": product_count}

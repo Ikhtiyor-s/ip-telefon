@@ -122,14 +122,16 @@ class NonborService:
         return businesses
 
     async def get_checking_businesses(self) -> List[Dict]:
-        """CHECKING bizneslar - bot secret bilan olish imkoni yo'q.
-        Shuning uchun bo'sh list qaytaradi. Yangi biznes kuzatish
-        accepted bizneslar fallback orqali ishlaydi (admin_call_service da).
-        """
-        return []
+        """CHECKING statusidagi bizneslarni olish - accepted endpoint dan state=CHECKING filtrlash"""
+        businesses = await self.get_businesses()
+        return [b for b in businesses if b.get("state") == "CHECKING"]
+
+    async def get_checking_businesses_count(self) -> int:
+        """CHECKING bizneslar soni"""
+        return len(await self.get_checking_businesses())
 
     async def get_checking_products_count(self) -> int:
-        """CHECKING mahsulotlar soni - accepted bizneslardan checking_products_count yig'ish"""
+        """CHECKING mahsulotlar soni - barcha bizneslardan checking_products_count yig'ish"""
         businesses = await self.get_businesses()
         return sum(b.get("checking_products_count", 0) for b in businesses)
 
