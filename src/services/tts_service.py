@@ -200,17 +200,15 @@ class GoogleTTSProvider(BaseTTSProvider):
 class EdgeTTSProvider(BaseTTSProvider):
     """Microsoft Edge TTS - Bepul va sifatli"""
 
-    def __init__(self, voice: str = "uz-UZ-MadinaNeural", rate: str = "+2%", pitch: str = "+7Hz"):
+    def __init__(self, voice: str = "uz-UZ-MadinaNeural"):
         self.voice = voice
-        self.rate = rate
-        self.pitch = pitch
 
     async def synthesize(self, text: str, output_path: Path) -> bool:
         """Edge TTS orqali ovoz yaratish"""
         try:
             import edge_tts
 
-            communicate = edge_tts.Communicate(text, self.voice, rate=self.rate, pitch=self.pitch)
+            communicate = edge_tts.Communicate(text, self.voice)
 
             mp3_path = output_path.with_suffix(".mp3")
             await communicate.save(str(mp3_path))
@@ -285,11 +283,7 @@ class TTSService:
             if self.provider_type == "google":
                 self._providers[lang] = GoogleTTSProvider(language=lang)
             else:
-                # O'zbek tili uchun sekinroq va tabiiy talaffuz
-                if lang == "uz":
-                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang], rate="-8%", pitch="+0Hz")
-                else:
-                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang])
+                self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang])
             logger.info(f"TTS provider yaratildi: lang={lang}, voice={LANG_VOICES[lang]}")
         return self._providers[lang]
 
