@@ -285,9 +285,9 @@ class TTSService:
             if self.provider_type == "google":
                 self._providers[lang] = GoogleTTSProvider(language=lang)
             else:
-                # O'zbek tili uchun speed/pitch sozlash
+                # O'zbek tili uchun sekinroq va tabiiy talaffuz
                 if lang == "uz":
-                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang], rate="+2%", pitch="+7Hz")
+                    self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang], rate="-8%", pitch="+0Hz")
                 else:
                     self._providers[lang] = EdgeTTSProvider(voice=LANG_VOICES[lang])
             logger.info(f"TTS provider yaratildi: lang={lang}, voice={LANG_VOICES[lang]}")
