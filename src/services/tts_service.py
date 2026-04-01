@@ -56,19 +56,20 @@ ADMIN_NEW_BUSINESS_MESSAGES = {
 }
 
 # Admin: kunlik hisobot xabarlari
+# biz_count = tasdiqlangan bizneslar, product_count = tekshiruvdagi mahsulotlar
 ADMIN_DAILY_REPORT_MESSAGES = {
-    "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
-    "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {biz_count} бизнесов и {product_count} товаров на проверке.",
-    "en": "Hello! Nonbor daily report. Currently {biz_count} businesses and {product_count} products are in checking status.",
-    "zh": "您好！Nonbor每日报告。目前有{biz_count}个商家和{product_count}个产品正在审核中。",
+    "uz": "Assalomu alaykum! Nonbor hisoboti. Platformada {biz_count} ta tasdiqlangan biznes bor. {product_count} ta mahsulot tekshiruv holatida.",
+    "ru": "Здравствуйте! Отчёт Нонбо́р. На платформе {biz_count} подтверждённых бизнесов. {product_count} товаров на проверке.",
+    "en": "Hello! Nonbor report. {biz_count} approved businesses on the platform. {product_count} products are in checking status.",
+    "zh": "您好！Nonbor报告。平台有{biz_count}个已通过商家。{product_count}个产品待审核。",
 }
 
 # Admin: ertalabki hisobot — tunda yangi bizneslar bor
 ADMIN_MORNING_REPORT_MESSAGES = {
-    "uz": "Assalomu alaykum! Nonbor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Hozirda jami {biz_count} ta biznes platformada.",
-    "ru": "Здравствуйте! Утренний отчёт Нонбор. За ночь добавлено {night_count} новых бизнесов. Всего на платформе {biz_count} бизнесов.",
-    "en": "Hello! Nonbor morning report. {night_count} new businesses were added overnight. Currently {biz_count} businesses on the platform.",
-    "zh": "您好！Nonbor早报。夜间新增{night_count}个商家。平台目前共有{biz_count}个商家。",
+    "uz": "Assalomu alaykum! Nonbor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Platformada jami {biz_count} ta tasdiqlangan biznes bor.",
+    "ru": "Здравствуйте! Утренний отчёт Нонбо́р. За ночь добавлено {night_count} новых бизнесов. Всего {biz_count} подтверждённых бизнесов.",
+    "en": "Hello! Nonbor morning report. {night_count} new businesses added overnight. {biz_count} approved businesses on the platform.",
+    "zh": "您好！Nonbor早报。夜间新增{night_count}个商家。平台共有{biz_count}个已通过商家。",
 }
 
 # Oldindan yaratiladigan maksimal buyurtma soni
@@ -94,23 +95,23 @@ def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> s
         }
         return test_messages.get(lang) or test_messages[DEFAULT_LANG]
 
-    # Faqat biznes bor
+    # Faqat biznes bor, mahsulot yo'q
     if product_count == 0:
         biz_only = {
-            "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {biz_count} ta biznes tekshiruv holatida.",
-            "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {biz_count} бизнесов на проверке.",
-            "en": "Hello! Nonbor report. Currently {biz_count} businesses are in checking status.",
-            "zh": "您好！Nonbor报告。目前有{biz_count}个商家正在审核中。",
+            "uz": "Assalomu alaykum! Nonbor hisoboti. Platformada {biz_count} ta tasdiqlangan biznes bor. Tekshiruvda mahsulot yo'q.",
+            "ru": "Здравствуйте! Отчёт Нонбо́р. На платформе {biz_count} подтверждённых бизнесов. Товаров на проверке нет.",
+            "en": "Hello! Nonbor report. {biz_count} approved businesses on the platform. No products in checking.",
+            "zh": "您好！Nonbor报告。平台有{biz_count}个已通过商家。无待审核产品。",
         }
         return (biz_only.get(lang) or biz_only[DEFAULT_LANG]).format(biz_count=biz_count)
 
-    # Faqat mahsulot bor
+    # Faqat mahsulot bor, biznes soni 0
     if biz_count == 0:
         prod_only = {
-            "uz": "Assalomu alaykum! Nonbor hisoboti. Hozirda {product_count} ta mahsulot tekshiruv holatida.",
-            "ru": "Здравствуйте! Отчёт платформы Нонбор. Сейчас {product_count} товаров на проверке.",
-            "en": "Hello! Nonbor report. Currently {product_count} products are in checking status.",
-            "zh": "您好！Nonbor报告。目前有{product_count}个产品正在审核中。",
+            "uz": "Assalomu alaykum! Nonbor hisoboti. {product_count} ta mahsulot tekshiruv holatida.",
+            "ru": "Здравствуйте! Отчёт Нонбо́р. {product_count} товаров на проверке.",
+            "en": "Hello! Nonbor report. {product_count} products are in checking status.",
+            "zh": "您好！Nonbor报告。{product_count}个产品待审核。",
         }
         return (prod_only.get(lang) or prod_only[DEFAULT_LANG]).format(product_count=product_count)
 
