@@ -34,7 +34,7 @@ PRIMARY_LANGS = ["uz", "ru", "en", "zh"]
 # Yangi buyurtma xabarlari ({count} → songa almashtiriladi)
 ORDER_MESSAGES = {
     "uz": "Assalomu alaykum! Bu Nonbor xizmati. Sizda {count} ta yangi buyurtma keldi, iltimos ilovani tekshiring.",
-    "ru": "Здравствуйте! Звонит сервис Нонбо́р. У вас {count} новых заказа, пожалуйста проверьте приложение.",
+    "ru": "Здравствуйте! Звонит сервис Ноонбор. У вас {count} новых заказа, пожалуйста проверьте приложение.",
     "en": "Hello! This is Nonbor calling. You have {count} new orders, please check your app.",
     "zh": "您好！Nonbor来电通知。您有{count}个新订单，请查看您的应用。",
 }
@@ -42,7 +42,7 @@ ORDER_MESSAGES = {
 # Reja (scheduled) eslatma xabarlari - har til uchun 1 ta
 PLANNED_MESSAGES = {
     "uz": "Assalomu alaykum! Bu Nonbor xizmati. Sizda rejalashtirilgan buyurtma bor. Buyurtmangizni tayyorlang.",
-    "ru": "Здравствуйте! Звонит сервис Нонбо́р. У вас запланированный заказ. Пожалуйста, подготовьте ваш заказ.",
+    "ru": "Здравствуйте! Звонит сервис Ноонбор. У вас запланированный заказ. Пожалуйста, подготовьте ваш заказ.",
     "en": "Hello! This is Nonbor calling. You have a scheduled order. Please prepare your order.",
     "zh": "您好！Nonbor来电提醒。您有一个计划订单，请准备好您的订单。",
 }
@@ -50,7 +50,7 @@ PLANNED_MESSAGES = {
 # Admin: yangi biznes qo'ng'iroq xabarlari
 ADMIN_NEW_BUSINESS_MESSAGES = {
     "uz": "Assalomu alaykum! Nonbor platformasida yangi biznes ochildi. Hozirda {count} ta restoran tekshiruv holatida.",
-    "ru": "Здравствуйте! Звонит платформа Нонбор. Зарегистрирован новый бизнес. Сейчас {count} ресторанов на проверке.",
+    "ru": "Здравствуйте! Звонит платформа Ноонбор. Зарегистрирован новый бизнес. Сейчас {count} ресторанов на проверке.",
     "en": "Hello! A new business has registered on Nonbor. Currently {count} restaurants are in checking status.",
     "zh": "您好！Nonbor平台有新商家注册。目前有{count}家餐厅正在审核中。",
 }
@@ -59,7 +59,7 @@ ADMIN_NEW_BUSINESS_MESSAGES = {
 # biz_count = tekshiruvdagi bizneslar, product_count = tekshiruvdagi mahsulotlar
 ADMIN_DAILY_REPORT_MESSAGES = {
     "uz": "Assalomu alaykum! Nonbor hisoboti. {biz_count} ta biznes va {product_count} ta mahsulot tekshiruv holatida.",
-    "ru": "Здравствуйте! Отчёт Нонбо́р. {biz_count} бизнесов и {product_count} товаров на проверке.",
+    "ru": "Здравствуйте! Отчёт Ноонбор. {biz_count} бизнесов и {product_count} товаров на проверке.",
     "en": "Hello! Nonbor report. {biz_count} businesses and {product_count} products are in checking status.",
     "zh": "您好！Nonbor报告。{biz_count}个商家和{product_count}个产品待审核。",
 }
@@ -67,7 +67,7 @@ ADMIN_DAILY_REPORT_MESSAGES = {
 # Admin: ertalabki hisobot — tunda yangi bizneslar bor
 ADMIN_MORNING_REPORT_MESSAGES = {
     "uz": "Assalomu alaykum! Nonbor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Platformada jami {biz_count} ta tasdiqlangan biznes bor.",
-    "ru": "Здравствуйте! Утренний отчёт Нонбо́р. За ночь добавлено {night_count} новых бизнесов. Всего {biz_count} подтверждённых бизнесов.",
+    "ru": "Здравствуйте! Утренний отчёт Ноонбор. За ночь добавлено {night_count} новых бизнесов. Всего {biz_count} подтверждённых бизнесов.",
     "en": "Hello! Nonbor morning report. {night_count} new businesses added overnight. {biz_count} approved businesses on the platform.",
     "zh": "您好！Nonbor早报。夜间新增{night_count}个商家。平台共有{biz_count}个已通过商家。",
 }
@@ -89,7 +89,7 @@ def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> s
     if biz_count == 0 and product_count == 0:
         test_messages = {
             "uz": "Assalomu alaykum! Nonbor tizimi ishlayapti. Hozirda tekshiruvda biznes va mahsulot yo'q.",
-            "ru": "Здравствуйте! Система Нонбор работает. Сейчас на проверке нет бизнесов и товаров.",
+            "ru": "Здравствуйте! Система Ноонбор работает. Сейчас на проверке нет бизнесов и товаров.",
             "en": "Hello! Nonbor system is working. Currently no businesses or products are in checking status.",
             "zh": "您好！Nonbor系统正常运行。目前没有待审核的商家和产品。",
         }
@@ -99,7 +99,7 @@ def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> s
     if product_count == 0:
         biz_only = {
             "uz": "Assalomu alaykum! Nonbor hisoboti. {biz_count} ta biznes tekshiruv holatida. Tekshiruvda mahsulot yo'q.",
-            "ru": "Здравствуйте! Отчёт Нонбо́р. {biz_count} бизнесов на проверке. Товаров на проверке нет.",
+            "ru": "Здравствуйте! Отчёт Ноонбор. {biz_count} бизнесов на проверке. Товаров на проверке нет.",
             "en": "Hello! Nonbor report. {biz_count} businesses in checking. No products in checking.",
             "zh": "您好！Nonbor报告。{biz_count}个商家待审核。无待审核产品。",
         }
@@ -109,7 +109,7 @@ def _admin_daily_report_text(biz_count: int, product_count: int, lang: str) -> s
     if biz_count == 0:
         prod_only = {
             "uz": "Assalomu alaykum! Nonbor hisoboti. {product_count} ta mahsulot tekshiruv holatida.",
-            "ru": "Здравствуйте! Отчёт Нонбо́р. {product_count} товаров на проверке.",
+            "ru": "Здравствуйте! Отчёт Ноонбор. {product_count} товаров на проверке.",
             "en": "Hello! Nonbor report. {product_count} products are in checking status.",
             "zh": "您好！Nonbor报告。{product_count}个产品待审核。",
         }
