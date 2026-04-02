@@ -197,7 +197,7 @@ class AutodialerPro:
         sip_host: str = "127.0.0.1",
         ami_port: int = 5038,
         ami_username: str = "autodialer",
-        ami_password: str = "autodialer123",
+        ami_password: str = "",
         # Telegram
         telegram_token: str = None,
         telegram_chat_id: str = None,
@@ -863,6 +863,11 @@ class AutodialerPro:
                                 reconnected = await self.ami.reconnect()
                                 if reconnected:
                                     logger.info("AMI qayta ulanish muvaffaqiyatli!")
+                                    # Agar pending buyurtmalar bo'lsa - qayta qo'ng'iroq imkonini berish
+                                    if (self.state.call_started and not self.state.call_in_progress
+                                            and self.state.pending_order_ids):
+                                        self.state.call_started = False
+                                        logger.info("AMI qayta ulanish: call_started reset, qayta qo'ng'iroq qilinadi")
                                 else:
                                     logger.warning("AMI qayta ulanish muvaffaqiyatsiz, 60s dan keyin qayta uriniladi")
                             except Exception as e:
@@ -1663,6 +1668,7 @@ class AutodialerPro:
             reconnected = await self.ami.reconnect()
             if not reconnected:
                 logger.error("AMI qayta ulanish muvaffaqiyatsiz! Qo'ng'iroq qilib bo'lmaydi")
+                # call_started True qoladi - _main_loop 60s da AMI reconnect va call_started reset qiladi
                 self.state.call_in_progress = False
                 return
 
@@ -2229,7 +2235,7 @@ async def main():
         sip_host=os.getenv("AMI_HOST", default_ami_host),
         ami_port=int(os.getenv("AMI_PORT", "5038")),
         ami_username=os.getenv("AMI_USERNAME", "autodialer"),
-        ami_password=os.getenv("AMI_PASSWORD", "autodialer123"),
+        ami_password=os.getenv("AMI_PASSWORD", ""),
 
         # Telegram
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN"),

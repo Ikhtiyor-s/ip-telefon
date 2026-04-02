@@ -3,12 +3,18 @@ services:
     image: andrius/asterisk:latest
     container_name: autodialer-asterisk
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "5038:5038"
+      - "10000-10100:10000-10100/udp"
     volumes:
       - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.conf:/etc/asterisk/manager.conf:ro
       - autodialer-audio:/var/lib/asterisk/sounds/autodialer
+    env_file:
+      - .env.production
     environment:
       - TZ=Asia/Tashkent
     healthcheck:
@@ -24,7 +30,8 @@ services:
     image: autodialer-pro:latest
     container_name: autodialer-pro
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8585:8585"
     depends_on:
       asterisk:
         condition: service_healthy
@@ -34,6 +41,8 @@ services:
       - ./data:/app/data
     env_file:
       - .env.production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   autodialer-audio:
