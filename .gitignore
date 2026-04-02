@@ -9,8 +9,7 @@ data/
 tmpclaude-*
 .env
 .env.*
-.env.production
-.env.local
+!.env.example
 *.log
 test_voices/
 nul
