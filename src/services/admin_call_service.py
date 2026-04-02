@@ -203,35 +203,30 @@ class AdminCallService:
         checking = await self.nonbor.get_checking_businesses()
         current_ids = {b.get("id") for b in checking if b.get("id")}
 
-        if not self._known_biz_ids:
-            # Birinchi ishga tushish - hozirgi CHECKING larni yozib olish
-            self._known_biz_ids = current_ids
-            self._save_config()
-            logger.info(f"Admin: boshlang'ich {len(current_ids)} ta CHECKING biznes kuzatuvga olindi")
+        # Yangi CHECKING bizneslar (avval CHECKING da bo'lmagan yoki ACCEPTED dan qaytgan)
+        new_ids = current_ids - self._known_biz_ids
+
+        # Har safar hozirgi CHECKING larni saqlash (ACCEPTED bo'lganlar o'chadi)
+        self._known_biz_ids = current_ids
+        self._save_config()
+
+        if not new_ids:
             return
 
-        new_ids = current_ids - self._known_biz_ids
-        if new_ids:
-            logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes topildi: {new_ids}")
-            self._known_biz_ids = current_ids
-            self._save_config()
+        logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING biznes topildi: {new_ids}")
 
-            # Ish vaqtini tekshirish
-            if not self._is_work_hours():
-                self._night_new_count += len(new_ids)
-                logger.info(f"Admin: ish vaqti emas, tunda {self._night_new_count} ta yangi biznes to'plandi")
-                return
+        # Ish vaqtini tekshirish
+        if not self._is_work_hours():
+            self._night_new_count += len(new_ids)
+            logger.info(f"Admin: ish vaqti emas, tunda {self._night_new_count} ta yangi biznes to'plandi")
+            return
 
-            wait = self.config.get("wait_before_call", 60)
-            if wait > 0:
-                logger.info(f"Admin: {wait}s kutish...")
-                await asyncio.sleep(wait)
+        wait = self.config.get("wait_before_call", 60)
+        if wait > 0:
+            logger.info(f"Admin: {wait}s kutish...")
+            await asyncio.sleep(wait)
 
-            await self._call_admin_new_business(len(current_ids))
-        else:
-            if current_ids != self._known_biz_ids:
-                self._known_biz_ids = current_ids
-                self._save_config()
+        await self._call_admin_new_business(len(current_ids))
 
     async def _call_admin_new_business(self, checking_count: int):
         lang = self.config.get("new_business_call_language", "uz")
