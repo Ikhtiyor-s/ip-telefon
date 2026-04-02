@@ -894,9 +894,10 @@ class AutodialerAPI:
             return self._err("JSON parse xatosi")
         phone = body.get("phone", "").strip()
         name = body.get("name", "").strip()
+        lang = body.get("lang", "uz").strip() or "uz"
         if not phone:
             return self._err("phone maydoni kerak")
-        if self._admin_svc.add_admin_phone(phone, name):
+        if self._admin_svc.add_admin_phone(phone, name, lang):
             return self._ok(self._admin_svc.get_admin_phones())
         return self._err("Bu raqam allaqachon mavjud")
 
