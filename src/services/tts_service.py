@@ -64,14 +64,6 @@ ADMIN_DAILY_REPORT_MESSAGES = {
     "zh": "您好！Non-bor报告。{biz_count}个商家和{product_count}个产品待审核。",
 }
 
-# Admin: yangi buyurtma xabarlari
-ADMIN_NEW_ORDER_MESSAGES = {
-    "uz": "Assalomu alaykum! Non-bor platformasida {count} ta yangi buyurtma keldi. Iltimos tekshiring.",
-    "ru": "Здравствуйте! На платформе Нон-бор поступило {count} новых заказа. Пожалуйста, проверьте.",
-    "en": "Hello! {count} new orders have arrived on the Non-bor platform. Please check.",
-    "zh": "您好！Non-bor平台有{count}个新订单。请检查。",
-}
-
 # Admin: ertalabki hisobot — tunda yangi bizneslar bor
 ADMIN_MORNING_REPORT_MESSAGES = {
     "uz": "Assalomu alaykum! Non-bor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Platformada jami {biz_count} ta tasdiqlangan biznes bor.",
@@ -285,12 +277,6 @@ class TTSService:
     async def generate_planned_message(self, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Reja eslatma xabarini tilga qarab olish/yaratish"""
         return await self._synthesize_with_cache(_planned_message_text(_normalize_lang(lang)), _normalize_lang(lang))
-
-    async def generate_admin_new_order(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """Admin: yangi buyurtmalar keldi, N ta buyurtma tekshiruv kutmoqda"""
-        lang = _normalize_lang(lang)
-        template = ADMIN_NEW_ORDER_MESSAGES.get(lang) or ADMIN_NEW_ORDER_MESSAGES[DEFAULT_LANG]
-        return await self._synthesize_with_cache(template.format(count=count), lang)
 
     async def generate_admin_new_business(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Admin: yangi biznes ochildi, N ta restoran tekshiruvda"""
