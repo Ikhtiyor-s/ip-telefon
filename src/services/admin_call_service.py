@@ -25,6 +25,8 @@ DEFAULT_CONFIG = {
     "daily_report_language": "uz",
     "new_business_call_enabled": True,
     "new_business_call_language": "uz",
+    "new_order_call_enabled": True,
+    "new_order_call_language": "uz",
     "work_hours_start": "08:00",
     "work_hours_end": "22:00",
     "known_checking_biz_ids": [],
@@ -46,7 +48,9 @@ class AdminCallService:
 
         # State
         self._known_biz_ids = set(self.config.get("known_checking_biz_ids", []))
+        self._known_order_ids: set = set()
         self._check_task: Optional[asyncio.Task] = None
+        self._order_task: Optional[asyncio.Task] = None
         self._daily_task: Optional[asyncio.Task] = None
         self._running = False
         self._night_new_count = 0  # Tunda topilgan yangi bizneslar soni
@@ -97,6 +101,7 @@ class AdminCallService:
         for key in ["call_mode", "wait_before_call", "max_call_attempts", "retry_interval",
                      "daily_report_enabled", "daily_report_time", "daily_report_language",
                      "new_business_call_enabled", "new_business_call_language",
+                     "new_order_call_enabled", "new_order_call_language",
                      "work_hours_start", "work_hours_end"]:
             if key in updates:
                 self.config[key] = updates[key]
@@ -106,12 +111,12 @@ class AdminCallService:
         # Tasklar avtomatik qayta boshlanishi
         asyncio.ensure_future(self._restart_tasks())
 
-    def add_admin_phone(self, phone: str, name: str = "") -> bool:
+    def add_admin_phone(self, phone: str, name: str = "", lang: str = "uz") -> bool:
         phones = self.config["admin_phones"]
         for p in phones:
             if p["phone"] == phone:
                 return False
-        phones.append({"phone": phone, "name": name, "enabled": True})
+        phones.append({"phone": phone, "name": name, "enabled": True, "lang": lang or "uz"})
         self._save_config()
         logger.info(f"Admin raqam qo'shildi: {phone} ({name})")
         return True
@@ -144,6 +149,10 @@ class AdminCallService:
             if not self._check_task or self._check_task.done():
                 self._check_task = asyncio.create_task(self._business_check_loop())
                 logger.info("Admin: yangi biznes tekshirish boshlandi")
+        if self.config.get("new_order_call_enabled", True):
+            if not self._order_task or self._order_task.done():
+                self._order_task = asyncio.create_task(self._order_check_loop())
+                logger.info("Admin: buyurtma tekshirish boshlandi")
         if self.config.get("daily_report_enabled", False):
             if not self._daily_task or self._daily_task.done():
                 self._daily_task = asyncio.create_task(self._daily_report_loop())
@@ -165,6 +174,16 @@ class AdminCallService:
                 self._check_task.cancel()
                 logger.info("Admin: yangi biznes tekshirish O'CHIRILDI")
 
+        # Buyurtma tekshirish
+        if self.config.get("new_order_call_enabled", True):
+            if not self._order_task or self._order_task.done():
+                self._order_task = asyncio.create_task(self._order_check_loop())
+                logger.info("Admin: buyurtma tekshirish YOQILDI")
+        else:
+            if self._order_task and not self._order_task.done():
+                self._order_task.cancel()
+                logger.info("Admin: buyurtma tekshirish O'CHIRILDI")
+
         # Kunlik hisobot
         if self.config.get("daily_report_enabled", False):
             # Vaqt o'zgarganda qayta boshlash kerak
@@ -180,6 +199,7 @@ class AdminCallService:
     async def stop(self):
         self._running = False
         self._stop_task(self._check_task)
+        self._stop_task(self._order_task)
         self._stop_task(self._daily_task)
 
     # ── Yangi biznes tekshirish ──
@@ -237,6 +257,61 @@ class AdminCallService:
 
         logger.info(f"Admin qo'ng'iroq: yangi biznes, {checking_count} ta tekshiruvda, til: {lang}")
         await self._call_admins(str(audio), "yangi_biznes")
+
+    # ── Yangi buyurtma tekshirish ──
+
+    async def _order_check_loop(self):
+        """Har 5s da CHECKING buyurtmalarni tekshirish"""
+        await asyncio.sleep(15)  # Startup kutish (biznes loop dan keyin)
+        logger.info("Admin: order check loop boshlandi")
+        while self._running:
+            try:
+                await self._check_new_orders()
+            except asyncio.CancelledError:
+                logger.info("Admin: order check loop bekor qilindi")
+                break
+            except Exception as e:
+                logger.error(f"Admin buyurtma tekshirish xatosi: {e}", exc_info=True)
+            await asyncio.sleep(5)
+
+    async def _check_new_orders(self):
+        """CHECKING buyurtmalarni kuzatish - yangi kelganda adminga qo'ng'iroq"""
+        orders = await self.nonbor.get_leads_by_status()
+        if orders is None:
+            return
+
+        current_ids = {o.get("id") for o in orders if o.get("id")}
+        new_ids = current_ids - self._known_order_ids
+        self._known_order_ids = current_ids
+
+        if not new_ids:
+            return
+
+        logger.info(f"Admin: {len(new_ids)} ta yangi CHECKING buyurtma topildi: {new_ids}")
+
+        if not self._is_work_hours():
+            logger.info(f"Admin: ish vaqti emas, buyurtma qo'ng'iroq o'tkazib yuborildi")
+            return
+
+        wait = self.config.get("wait_before_call", 60)
+        if wait > 0:
+            logger.info(f"Admin order: {wait}s kutish...")
+            await asyncio.sleep(wait)
+
+        # Kutish vaqtida yangi CHECKING orders sonini qayta olish
+        updated_orders = await self.nonbor.get_leads_by_status()
+        order_count = len(updated_orders) if updated_orders else len(current_ids)
+        await self._call_admin_new_order(order_count)
+
+    async def _call_admin_new_order(self, order_count: int):
+        lang = self.config.get("new_order_call_language", "uz")
+        audio = await self.tts.generate_admin_new_order(order_count, lang=lang)
+        if not audio:
+            logger.error("Admin order: TTS audio yaratilmadi")
+            return
+
+        logger.info(f"Admin qo'ng'iroq: {order_count} ta yangi buyurtma, til: {lang}")
+        await self._call_admins(str(audio), "yangi_buyurtma")
 
     # ── Kunlik hisobot ──
 
