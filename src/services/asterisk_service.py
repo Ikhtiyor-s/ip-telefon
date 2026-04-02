@@ -549,16 +549,7 @@ class CallManager:
                 self._call_completed_event.set()
 
     async def _on_hangup(self, data: dict):
-        """Qo'ng'iroq tugatildi"""
-        channel = data.get("Channel", "")
-        cause = data.get("Cause", "")
-        cause_txt = data.get("Cause-txt", "")
-
-        logger.debug(f"Hangup: channel={channel}, cause={cause} - {cause_txt}")
-
-        # Hangup eventini e'tiborsiz qoldiramiz
-        # DialEnd eventi qo'ng'iroq natijasini to'g'ri beradi
-        # Hangup ko'p marta kelishi mumkin (Local channel, PJSIP channel)
+        """Hangup eventi - e'tiborsiz (DialEnd yetarli)"""
         pass
 
     async def _on_dial_end(self, data: dict):

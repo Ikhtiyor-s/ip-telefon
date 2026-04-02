@@ -234,11 +234,6 @@ class AdminCallService:
                 self._save_config()
 
     async def _call_admin_new_business(self, checking_count: int):
-        phones = self._get_enabled_phones()
-        if not phones:
-            logger.warning("Admin: raqamlar yo'q, qo'ng'iroq qilinmadi")
-            return
-
         lang = self.config.get("new_business_call_language", "uz")
         audio = await self.tts.generate_admin_new_business(checking_count, lang=lang)
         if not audio:
@@ -280,11 +275,6 @@ class AdminCallService:
                 await asyncio.sleep(60)
 
     async def _send_daily_report(self):
-        phones = self._get_enabled_phones()
-        if not phones:
-            logger.warning("Admin: kunlik hisobot - raqamlar yo'q")
-            return
-
         # CHECKING bizneslar va mahsulotlar
         biz_count = await self.nonbor.get_checking_businesses_count()
         product_count = await self.nonbor.get_checking_products_count()

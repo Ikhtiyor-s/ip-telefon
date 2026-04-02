@@ -17,6 +17,7 @@ Jarayon:
 """
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -48,10 +49,9 @@ from services import (
 from api_server import AutodialerAPI
 
 # Logging - UTF-8 encoding (Windows cp1251 muammosini hal qilish)
-import sys as _sys
 _log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _stream_handler = logging.StreamHandler()
-_stream_handler.stream = open(_sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace', closefd=False)
+_stream_handler.stream = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace', closefd=False)
 _file_handler = logging.FileHandler("logs/autodialer.log", encoding='utf-8')
 logging.basicConfig(
     level=logging.INFO,
@@ -231,8 +231,6 @@ class AutodialerPro:
         else:
             logger.info("✓ ASTERISK FAOL (Linux/Production rejim - to'liq funksional)")
 
-        self.phone_overrides = {}
-
         # Holat
         self.state = AutodialerState()
         self._running = False
@@ -347,7 +345,6 @@ class AutodialerPro:
         """Guruh xabarlarini fayldan yuklash (restart da davom etish uchun)"""
         try:
             if self._group_messages_file.exists():
-                import json
                 with open(self._group_messages_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     # JSON key lar string bo'lgani uchun int ga o'tkazamiz
@@ -366,8 +363,6 @@ class AutodialerPro:
     def _save_group_messages(self):
         """Guruh xabarlarini faylga saqlash"""
         try:
-            import json
-            # Katalog mavjudligini tekshirish
             self._group_messages_file.parent.mkdir(exist_ok=True)
             with open(self._group_messages_file, "w", encoding="utf-8") as f:
                 json.dump(self._group_order_messages, f, indent=2, ensure_ascii=False)
@@ -378,7 +373,6 @@ class AutodialerPro:
         """Reja eslatmalarini fayldan yuklash"""
         try:
             if self._planned_reminders_file.exists():
-                import json
                 with open(self._planned_reminders_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self._planned_reminders_sent = set(data.get("sent", []))
@@ -390,7 +384,6 @@ class AutodialerPro:
     def _save_planned_reminders(self):
         """Reja eslatmalarini faylga saqlash"""
         try:
-            import json
             self._planned_reminders_file.parent.mkdir(exist_ok=True)
             with open(self._planned_reminders_file, "w", encoding="utf-8") as f:
                 json.dump({"sent": list(self._planned_reminders_sent)}, f, indent=2)
@@ -799,7 +792,6 @@ class AutodialerPro:
             for lead in leads:
                 created_at = lead.get("created_at")
                 if created_at:
-                    from datetime import timezone
                     try:
                         lead_time = datetime.fromisoformat(created_at.replace("Z", "+00:00")).replace(tzinfo=None)
                     except (ValueError, AttributeError):
@@ -1178,7 +1170,6 @@ class AutodialerPro:
                 delivery_time = ""
                 if raw_planned_time:
                     try:
-                        from datetime import timezone, timedelta
                         uz_tz = timezone(timedelta(hours=5))
                         dt = datetime.fromisoformat(str(raw_planned_time).replace('Z', '+00:00'))
                         # O'zbekiston vaqtiga o'tkazish
@@ -1953,60 +1944,6 @@ class AutodialerPro:
         """Qo'ng'iroq urinishi callback"""
         self.state.call_attempts = attempt
         logger.info(f"Qo'ng'iroq urinishi: {attempt}/{max_attempts}")
-
-    async def _send_telegram_alert(self):
-        """Telegram xabar yuborish - sotuvchi bo'yicha guruhlangan"""
-        if not self.notification_manager:
-            return
-
-        order_ids = self.state.pending_order_ids
-        logger.info(f"Telegram xabar yuborish: {len(order_ids)} ta buyurtma")
-
-        # Barcha buyurtmalarni olish
-        all_orders = []
-        for order_id in order_ids:
-            try:
-                order_data = await self.nonbor.get_order_full_data(order_id)
-                all_orders.append(order_data)
-            except Exception as e:
-                logger.error(f"Buyurtma #{order_id} ma'lumotini olishda xato: {e}")
-
-        # Sotuvchi bo'yicha guruhlash
-        sellers = {}
-        for order in all_orders:
-            seller_phone = order.get("seller_phone", "Noma'lum")
-            if seller_phone not in sellers:
-                sellers[seller_phone] = {
-                    "seller_name": order.get("seller_name", "Noma'lum"),
-                    "seller_phone": seller_phone,
-                    "seller_address": order.get("seller_address", "Noma'lum"),
-                    "orders": [],
-                    "chat_id": None,
-                }
-            sellers[seller_phone]["orders"].append(order)
-
-            # Biznes guruh chat_id ni aniqlash
-            if not sellers[seller_phone]["chat_id"]:
-                order_id = order.get("lead_id") or order.get("order_number")
-                if order_id and order_id in self._group_order_messages:
-                    biz_id = self._group_order_messages[order_id].get("biz_id")
-                    if biz_id and biz_id in self.stats_handler._business_groups:
-                        sellers[seller_phone]["chat_id"] = self.stats_handler._business_groups[biz_id]
-
-        # Har bir sotuvchi uchun bitta xabar
-        for seller_phone, seller_data in sellers.items():
-            try:
-                # Har bir sotuvchi uchun o'z qo'ng'iroq urinishlari soni
-                seller_attempts = self._seller_call_attempts.get(seller_phone, 0)
-                # Alert xabari ADMIN guruhga yuboriladi (default chat_id)
-                logger.info(f"Sotuvchi {seller_data['seller_name']}: {len(seller_data['orders'])} ta buyurtma, {seller_attempts} urinish, chat=ADMIN")
-                await self.notification_manager.notify_seller_orders(
-                    seller_data,
-                    seller_attempts,
-                    chat_id=None  # Admin guruhga
-                )
-            except Exception as e:
-                logger.error(f"Sotuvchi {seller_phone} xabar yuborishda xato: {e}")
 
     async def _delete_telegram_messages(self):
         """Telegram xabarlarni o'chirish"""

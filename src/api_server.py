@@ -156,6 +156,18 @@ class AutodialerAPI:
     def _err(self, message, status=400):
         return self._json({"success": False, "message": message}, status=status)
 
+    def _paginated(self, records, page, page_size):
+        """Paginatsiya qilingan javob"""
+        total = len(records)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        return self._ok({
+            "records": records[start:start + page_size],
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+        })
+
     @property
     def _stats(self):
         return self.autodialer.stats if self.autodialer else None
@@ -202,17 +214,8 @@ class AutodialerAPI:
             return self._ok({"records": [], "total": 0, "page": 1, "total_pages": 0})
 
         s = self._stats.get_period_stats(period)
-        records = list(reversed(s.call_records))  # Yangilari birinchi
-        total = len(records)
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        start = (page - 1) * page_size
-        end = start + page_size
-        return self._ok({
-            "records": records[start:end],
-            "total": total,
-            "page": page,
-            "total_pages": total_pages,
-        })
+        records = list(reversed(s.call_records))
+        return self._paginated(records, page, page_size)
 
     async def get_orders(self, request):
         """Buyurtmalar ro'yxati"""
@@ -226,20 +229,9 @@ class AutodialerAPI:
 
         s = self._stats.get_period_stats(period)
         records = list(reversed(s.order_records))
-
         if status_filter:
             records = [r for r in records if r.get("result") == status_filter or r.get("order_status") == status_filter]
-
-        total = len(records)
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        start = (page - 1) * page_size
-        end = start + page_size
-        return self._ok({
-            "records": records[start:end],
-            "total": total,
-            "page": page,
-            "total_pages": total_pages,
-        })
+        return self._paginated(records, page, page_size)
 
     async def get_daily_trend(self, request):
         """Kunlik trend — oxirgi N kun"""
@@ -371,8 +363,7 @@ class AutodialerAPI:
                         })
                     return result
 
-                import asyncio as _asyncio
-                all_results = await _asyncio.gather(
+                all_results = await asyncio.gather(
                     *[fetch_biz_orders(biz) for biz in businesses],
                     return_exceptions=True
                 )

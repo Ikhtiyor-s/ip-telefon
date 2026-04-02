@@ -133,13 +133,59 @@ def _planned_message_text(lang: str) -> str:
     return PLANNED_MESSAGES.get(lang) or PLANNED_MESSAGES[DEFAULT_LANG]
 
 
+def _normalize_lang(lang: str) -> str:
+    """Til kodini normalizatsiya qilish"""
+    lang = (lang or DEFAULT_LANG).lower()
+    return lang if lang in LANG_VOICES else DEFAULT_LANG
+
+
 class BaseTTSProvider(ABC):
     """TTS provider uchun asosiy klass"""
 
     @abstractmethod
-    async def synthesize(self, text: str, output_path: Path) -> bool:
-        """Matnni ovozga aylantirish"""
+    async def _generate_mp3(self, text: str, mp3_path: Path) -> bool:
+        """MP3 fayl yaratish (subclass implement qiladi)"""
         pass
+
+    async def synthesize(self, text: str, output_path: Path) -> bool:
+        """Matnni ovozga aylantirish: MP3 yaratish → WAV convert"""
+        try:
+            mp3_path = output_path.with_suffix(".mp3")
+            if not await self._generate_mp3(text, mp3_path):
+                return False
+
+            if not mp3_path.exists() or mp3_path.stat().st_size == 0:
+                logger.error(f"TTS MP3 yaratilmadi: {mp3_path}")
+                return False
+
+            success = await self._convert_to_wav(mp3_path, output_path)
+            mp3_path.unlink(missing_ok=True)
+
+            if not success or not output_path.exists() or output_path.stat().st_size == 0:
+                logger.error(f"TTS WAV yaratilmadi: {output_path}")
+                return False
+
+            logger.info(f"TTS yaratildi: {output_path} ({output_path.stat().st_size} bayt)")
+            return True
+        except Exception as e:
+            logger.error(f"TTS xatosi: {e}", exc_info=True)
+            return False
+
+    async def _convert_to_wav(self, mp3_path: Path, wav_path: Path) -> bool:
+        """MP3 ni WAV ga convert qilish (8kHz, mono, Asterisk uchun)"""
+        cmd = [
+            "ffmpeg", "-y", "-i", str(mp3_path),
+            "-ar", "8000", "-ac", "1", "-acodec", "pcm_s16le",
+            str(wav_path)
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            logger.error(f"ffmpeg xatosi (code={process.returncode}): {stderr.decode()[:500]}")
+            return False
+        return True
 
 
 class GoogleTTSProvider(BaseTTSProvider):
@@ -148,53 +194,10 @@ class GoogleTTSProvider(BaseTTSProvider):
     def __init__(self, language: str = "uz"):
         self.language = language
 
-    async def synthesize(self, text: str, output_path: Path) -> bool:
-        """Google TTS orqali ovoz yaratish"""
-        try:
-            from gtts import gTTS
-
-            tts = gTTS(text=text, lang=self.language, slow=False)
-
-            mp3_path = output_path.with_suffix(".mp3")
-            tts.save(str(mp3_path))
-
-            if not mp3_path.exists() or mp3_path.stat().st_size == 0:
-                logger.error(f"Google TTS MP3 yaratilmadi: {mp3_path}")
-                return False
-
-            success = await self._convert_to_wav(mp3_path, output_path)
-            mp3_path.unlink(missing_ok=True)
-
-            if not success or not output_path.exists() or output_path.stat().st_size == 0:
-                logger.error(f"Google TTS WAV yaratilmadi: {output_path}")
-                return False
-
-            logger.info(f"Google TTS yaratildi: {output_path} ({output_path.stat().st_size} bayt)")
-            return True
-
-        except Exception as e:
-            logger.error(f"Google TTS xatosi: {e}", exc_info=True)
-            return False
-
-    async def _convert_to_wav(self, mp3_path: Path, wav_path: Path) -> bool:
-        """MP3 ni WAV ga convert qilish (8kHz, mono)"""
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(mp3_path),
-            "-ar", "8000",
-            "-ac", "1",
-            "-acodec", "pcm_s16le",
-            str(wav_path)
-        ]
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            logger.error(f"ffmpeg xatosi (code={process.returncode}): {stderr.decode()[:500]}")
-            return False
+    async def _generate_mp3(self, text: str, mp3_path: Path) -> bool:
+        from gtts import gTTS
+        tts = gTTS(text=text, lang=self.language, slow=False)
+        tts.save(str(mp3_path))
         return True
 
 
@@ -204,53 +207,10 @@ class EdgeTTSProvider(BaseTTSProvider):
     def __init__(self, voice: str = "uz-UZ-MadinaNeural"):
         self.voice = voice
 
-    async def synthesize(self, text: str, output_path: Path) -> bool:
-        """Edge TTS orqali ovoz yaratish"""
-        try:
-            import edge_tts
-
-            communicate = edge_tts.Communicate(text, self.voice)
-
-            mp3_path = output_path.with_suffix(".mp3")
-            await communicate.save(str(mp3_path))
-
-            if not mp3_path.exists() or mp3_path.stat().st_size == 0:
-                logger.error(f"Edge TTS MP3 yaratilmadi yoki bo'sh: {mp3_path}")
-                return False
-
-            success = await self._convert_to_wav(mp3_path, output_path)
-            mp3_path.unlink(missing_ok=True)
-
-            if not success or not output_path.exists() or output_path.stat().st_size == 0:
-                logger.error(f"Edge TTS WAV yaratilmadi: {output_path}")
-                return False
-
-            logger.info(f"Edge TTS yaratildi: {output_path} ({output_path.stat().st_size} bayt)")
-            return True
-
-        except Exception as e:
-            logger.error(f"Edge TTS xatosi: {e}", exc_info=True)
-            return False
-
-    async def _convert_to_wav(self, mp3_path: Path, wav_path: Path) -> bool:
-        """MP3 ni WAV ga convert qilish (8kHz, mono, Asterisk uchun)"""
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(mp3_path),
-            "-ar", "8000",
-            "-ac", "1",
-            "-acodec", "pcm_s16le",
-            str(wav_path)
-        ]
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            logger.error(f"ffmpeg xatosi (code={process.returncode}): {stderr.decode()[:500]}")
-            return False
+    async def _generate_mp3(self, text: str, mp3_path: Path) -> bool:
+        import edge_tts
+        communicate = edge_tts.Communicate(text, self.voice)
+        await communicate.save(str(mp3_path))
         return True
 
 
@@ -277,9 +237,7 @@ class TTSService:
 
     def _get_provider(self, lang: str) -> BaseTTSProvider:
         """Tilga mos provider olish"""
-        lang = lang.lower() if lang else DEFAULT_LANG
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
+        lang = _normalize_lang(lang)
         if lang not in self._providers:
             if self.provider_type == "google":
                 self._providers[lang] = GoogleTTSProvider(language=lang)
@@ -296,9 +254,7 @@ class TTSService:
 
     async def _synthesize_with_cache(self, text: str, lang: str) -> Optional[Path]:
         """Matnni cache bilan synthesize qilish"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
+        lang = _normalize_lang(lang)
         cache_path = self._get_cache_path(text, lang)
         # Bo'sh yoki buzilgan cache faylni qayta yaratish
         if cache_path.exists() and cache_path.stat().st_size == 0:
@@ -313,60 +269,33 @@ class TTSService:
         return cache_path
 
     async def generate_order_message(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """
-        Yangi buyurtma xabarini tilga qarab olish/yaratish
-
-        Args:
-            count: Buyurtmalar soni (1-30)
-            lang: Til kodi ('uz', 'ru', 'en')
-        """
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            logger.warning(f"TTS: til qo'llab-quvvatlanmaydi: {lang!r}, {DEFAULT_LANG} ishlatiladi")
-            lang = DEFAULT_LANG
-        text = _order_message_text(count, lang)
+        """Yangi buyurtma xabarini tilga qarab olish/yaratish"""
+        lang = _normalize_lang(lang)
         logger.info(f"TTS order: lang={lang}, count={count}")
-        return await self._synthesize_with_cache(text, lang)
+        return await self._synthesize_with_cache(_order_message_text(count, lang), lang)
 
     async def generate_planned_message(self, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Reja eslatma xabarini tilga qarab olish/yaratish"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
-        return await self._synthesize_with_cache(_planned_message_text(lang), lang)
+        return await self._synthesize_with_cache(_planned_message_text(_normalize_lang(lang)), _normalize_lang(lang))
 
     async def generate_admin_new_business(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Admin: yangi biznes ochildi, N ta restoran tekshiruvda"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
-        text = _admin_new_business_text(count, lang)
-        return await self._synthesize_with_cache(text, lang)
+        return await self._synthesize_with_cache(_admin_new_business_text(count, _normalize_lang(lang)), _normalize_lang(lang))
 
     async def generate_admin_morning_report(self, biz_count: int, night_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """Admin: ertalabki hisobot — tunda yangi bizneslar soni"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
+        """Admin: ertalabki hisobot"""
+        lang = _normalize_lang(lang)
         template = ADMIN_MORNING_REPORT_MESSAGES.get(lang) or ADMIN_MORNING_REPORT_MESSAGES[DEFAULT_LANG]
-        text = template.format(biz_count=biz_count, night_count=night_count)
-        return await self._synthesize_with_cache(text, lang)
+        return await self._synthesize_with_cache(template.format(biz_count=biz_count, night_count=night_count), lang)
 
     async def generate_admin_daily_report(self, biz_count: int, product_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """Admin: kunlik hisobot - N biznes, M mahsulot tekshiruvda"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
-        text = _admin_daily_report_text(biz_count, product_count, lang)
-        return await self._synthesize_with_cache(text, lang)
+        """Admin: kunlik hisobot"""
+        return await self._synthesize_with_cache(_admin_daily_report_text(biz_count, product_count, _normalize_lang(lang)), _normalize_lang(lang))
 
     def get_audio_path(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Mavjud audio faylni olish (agar cache da bo'lsa)"""
-        lang = (lang or DEFAULT_LANG).lower()
-        if lang not in LANG_VOICES:
-            lang = DEFAULT_LANG
-        text = _order_message_text(count, lang)
-        cache_path = self._get_cache_path(text, lang)
+        lang = _normalize_lang(lang)
+        cache_path = self._get_cache_path(_order_message_text(count, lang), lang)
         return cache_path if cache_path.exists() else None
 
     async def pregenerate_messages(self):
