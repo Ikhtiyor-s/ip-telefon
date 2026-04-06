@@ -31,6 +31,12 @@ from dotenv import load_dotenv
 # .env yuklash
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+
+def getenv_int(key: str, default: int) -> int:
+    """os.getenv dan int olish — inline comment va bo'sh joylarni tozalaydi."""
+    raw = os.getenv(key, str(default))
+    return int(raw.split('#')[0].strip())
+
 from services import (
     TTSService,
     NonborService,
@@ -336,7 +342,7 @@ class AutodialerPro:
         )
 
         # HTTP API server (admin panel uchun)
-        api_port = int(os.getenv("API_PORT", "8585"))
+        api_port = getenv_int("API_PORT", 8585)
         self.api_server = AutodialerAPI(autodialer=self, port=api_port)
 
         logger.info("AutodialerPro yaratildi")
@@ -2233,7 +2239,7 @@ async def main():
     autodialer = AutodialerPro(
         # Asterisk AMI
         sip_host=os.getenv("AMI_HOST", default_ami_host),
-        ami_port=int(os.getenv("AMI_PORT", "5038")),
+        ami_port=getenv_int("AMI_PORT", 5038),
         ami_username=os.getenv("AMI_USERNAME", "autodialer"),
         ami_password=os.getenv("AMI_PASSWORD", ""),
 
@@ -2245,12 +2251,12 @@ async def main():
         seller_phone=os.getenv("SELLER_PHONE", "+998901009300"),
 
         # Vaqtlar
-        wait_before_call=int(os.getenv("WAIT_BEFORE_CALL", "90")),
-        telegram_alert_time=int(os.getenv("TELEGRAM_ALERT_TIME", "180")),
-        max_call_attempts=int(os.getenv("MAX_CALL_ATTEMPTS", "2")),
-        retry_interval=int(os.getenv("RETRY_INTERVAL", "30")),
-        planned_reminder_time=int(os.getenv("PLANNED_REMINDER_TIME", "60")),
-        planned_group_alert_time=int(os.getenv("PLANNED_GROUP_ALERT_TIME", "60")),
+        wait_before_call=getenv_int("WAIT_BEFORE_CALL", 90),
+        telegram_alert_time=getenv_int("TELEGRAM_ALERT_TIME", 180),
+        max_call_attempts=getenv_int("MAX_CALL_ATTEMPTS", 2),
+        retry_interval=getenv_int("RETRY_INTERVAL", 30),
+        planned_reminder_time=getenv_int("PLANNED_REMINDER_TIME", 60),
+        planned_group_alert_time=getenv_int("PLANNED_GROUP_ALERT_TIME", 60),
 
         # Platform
         skip_asterisk=skip_asterisk,
