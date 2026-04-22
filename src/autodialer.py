@@ -1747,11 +1747,22 @@ class AutodialerPro:
                 logger.error(f"Buyurtma #{order_id} ma'lumotini olishda xato: {e}")
 
         if not sellers:
-            logger.info("Barcha buyurtmalar haqida allaqachon xabar berilgan, qo'ng'iroq qilish kerak emas")
-            # Qo'ng'iroq jarayonini tugatish
+            # sellers bo'sh: yoki barcha buyurtmalar allaqachon xabar qilingan,
+            # yoki telefon raqamlari topilmadi
+            all_comm = set()
+            for oids in self.state.last_communicated_orders.values():
+                all_comm.update(oids)
+            uncalled = [oid for oid in order_ids if oid not in all_comm]
             self.state.call_in_progress = False
-            # State ni tozalash (last_communicated_orders saqlanadi)
             self.state.reset()
+            if uncalled and self.state.pending_order_ids:
+                # Telefon raqami topilmadi - keyinroq qayta urinish
+                wait_extra = max(0, self.wait_before_call - self.retry_interval)
+                self.state.last_new_order_time = datetime.now() - timedelta(seconds=wait_extra)
+                self.state.waiting_for_call = True
+                logger.warning(f"{len(uncalled)} ta buyurtma telefon raqamisiz, {self.retry_interval}s dan keyin qayta urinish")
+            else:
+                logger.info("Barcha buyurtmalar allaqachon xabar qilingan, qo'ng'iroq kerak emas")
             return
 
         # Har bir sotuvchiga PARALLEL qo'ng'iroq qilish
@@ -1788,12 +1799,12 @@ class AutodialerPro:
 
             logger.info(f"Qo'ng'iroq: {seller_name} ({seller_phone}), {order_count} ta buyurtma, til: {seller_lang}")
 
-            # TTS audio olish (tilga qarab)
-            audio_path = await self.tts.generate_order_message(order_count, lang=seller_lang)
+            # TTS audio olish (o'zbek + rus, ikki tilli)
+            audio_path = await self.tts.generate_bilingual_order_message(order_count)
             if not audio_path:
-                logger.error(f"TTS audio yaratilmadi: {seller_phone}, til: {seller_lang}")
+                logger.error(f"TTS audio yaratilmadi: {seller_phone}")
                 return None
-            logger.info(f"TTS audio tayyor: {audio_path} ({audio_path.stat().st_size} bayt), til: {seller_lang}")
+            logger.info(f"TTS audio tayyor: {audio_path} ({audio_path.stat().st_size} bayt), til: uz+ru")
 
             # Buyurtma IDlari
             order_ids = [o.get("lead_id") for o in seller_data["orders"]]
@@ -1842,9 +1853,9 @@ class AutodialerPro:
                     return (False, None)
                 logger.info(f"{still_checking}/{len(order_ids)} ta buyurtma hali CHECKING da — qayta qo'ng'iroq qilinadi")
 
-                # Yangi TTS audio yaratish (yangilangan son bilan, xuddi shu til bilan)
-                new_audio_path = await self.tts.generate_order_message(new_count, lang=seller_lang)
-                logger.info(f"Yangi audio yaratildi: {new_count} ta buyurtma (til: {seller_lang})")
+                # Yangi TTS audio yaratish (yangilangan son bilan, ikki tilli)
+                new_audio_path = await self.tts.generate_bilingual_order_message(new_count)
+                logger.info(f"Yangi audio yaratildi: {new_count} ta buyurtma (til: uz+ru)")
 
                 return (True, str(new_audio_path) if new_audio_path else None)
 
@@ -1930,12 +1941,20 @@ class AutodialerPro:
         # Qo'ng'iroq tugadi - javob berilgan yoki berilmagan, state ni tozalash
         # MUHIM: Har bir sotuvchi uchun call_attempts allaqachon yuqorida saqlangan (_seller_call_attempts)
 
-        if failed_count == 0:
-            logger.info("Barcha qo'ng'iroqlar muvaffaqiyatli, state tozalanmoqda")
-            # Telegram xabarlarni HECH QACHON O'CHIRMAYMIZ - ular doim qoladi
+        if failed_count == 0 and uncommunicated_count == 0:
+            logger.info("Barcha qo'ng'iroqlar muvaffaqiyatli, barcha buyurtmalar xabar qilindi")
             logger.info("Telegram xabarlar saqlanadi (o'chirilmaydi)")
-            # To'liq reset - javob berilgan, qayta qo'ng'iroq kerak emas
             self.state.reset()
+        elif failed_count == 0 and uncommunicated_count > 0:
+            # Barcha chaqirilgan sotuvchilar javob berdi, lekin ba'zi buyurtmalar chaqirilmadi
+            # (qo'ng'iroq paytida yangi buyurtmalar keldi - race condition)
+            logger.info(f"Qo'ng'iroqlar muvaffaqiyatli, lekin {uncommunicated_count} ta buyurtma chaqirilmadi (yangi keldi)")
+            self.state.reset()
+            if self.state.pending_order_ids:
+                wait_extra = max(0, self.wait_before_call - self.retry_interval)
+                self.state.last_new_order_time = datetime.now() - timedelta(seconds=wait_extra)
+                self.state.waiting_for_call = True
+                logger.info(f"Chaqirilmagan buyurtmalar uchun {self.retry_interval}s dan keyin qayta qo'ng'iroq")
         elif uncommunicated_count == 0:
             # BARCHA buyurtmalar haqida xabar berilgan (javob berilgan yoki berilmagan)
             # Qayta urinish kerak emas
@@ -1944,13 +1963,15 @@ class AutodialerPro:
             # State ni tozalash (lekin last_communicated_orders saqlanadi)
             self.state.reset()
         else:
-            # Javob berilmadi — keyingi polling siklida qayta qo'ng'iroq qilinadi
-            # last_communicated_orders da faqat javob berganlar bor,
-            # javob bermaganlar keyingi siklda yangi buyurtmalar bilan birga jamlanadi
+            # Javob berilmadi — retry_interval dan keyin qayta qo'ng'iroq
             logger.warning(f"{failed_count} ta qo'ng'iroqqa javob berilmadi, {uncommunicated_count} ta buyurtma uchun")
-            logger.info("Javob bermaganlar keyingi polling siklida qayta qo'ng'iroq qilinadi")
-            # State ni tozalash (lekin last_communicated_orders SAQLANADI)
             self.state.reset()
+            # Javob bermaganlar uchun qayta qo'ng'iroq timerni boshlash
+            if self.state.pending_order_ids:
+                wait_already = max(0, self.wait_before_call - self.retry_interval)
+                self.state.last_new_order_time = datetime.now() - timedelta(seconds=wait_already)
+                self.state.waiting_for_call = True
+                logger.info(f"Javob bermaganlar uchun qayta qo'ng'iroq {self.retry_interval}s dan keyin qilinadi")
 
     async def _on_call_attempt(self, attempt: int, max_attempts: int):
         """Qo'ng'iroq urinishi callback"""

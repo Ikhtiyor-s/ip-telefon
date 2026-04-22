@@ -33,8 +33,8 @@ PRIMARY_LANGS = ["uz", "ru", "en", "zh"]
 
 # Yangi buyurtma xabarlari ({count} → songa almashtiriladi)
 ORDER_MESSAGES = {
-    "uz": "Assalomu alaykum! Bu Non-bor xizmati. Sizda {count} ta yangi buyurtma keldi, iltimos ilovani tekshiring.",
-    "ru": "Здравствуйте! Звонит сервис Нон-бор. У вас {count} новых заказа, пожалуйста проверьте приложение.",
+    "uz": "Assalomu alaykum! Bu Non-bor xizmati. Sizda {count} ta yangi buyurtma bor. Iltimos, ilovani tekshiring.",
+    "ru": "Здравствуйте! Это сервис Нон-бор. У вас {count} новых заказов. Пожалуйста, проверьте приложение.",
     "en": "Hello! This is Non-bor calling. You have {count} new orders, please check your app.",
     "zh": "您好！Non-bor来电通知。您有{count}个新订单，请查看您的应用。",
 }
@@ -268,11 +268,58 @@ class TTSService:
             logger.info(f"TTS cache saqlandi: {cache_path} ({cache_path.stat().st_size} bayt)")
         return cache_path
 
+    async def _concat_audio(self, inputs: list, output_path: Path) -> bool:
+        """Bir nechta WAV faylni birlashtirib bitta fayl yaratish (ffmpeg concat)"""
+        input_args = []
+        for p in inputs:
+            input_args += ["-i", str(p)]
+        filter_str = "".join(f"[{i}:a]" for i in range(len(inputs)))
+        filter_complex = f"{filter_str}concat=n={len(inputs)}:v=0:a=1[out]"
+        cmd = [
+            "ffmpeg", "-y", *input_args,
+            "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-ar", "8000", "-ac", "1", "-acodec", "pcm_s16le",
+            str(output_path)
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            logger.error(f"Audio birlashtirish xatosi: {stderr.decode()[:500]}")
+            return False
+        return True
+
     async def generate_order_message(self, count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Yangi buyurtma xabarini tilga qarab olish/yaratish"""
         lang = _normalize_lang(lang)
         logger.info(f"TTS order: lang={lang}, count={count}")
         return await self._synthesize_with_cache(_order_message_text(count, lang), lang)
+
+    async def generate_bilingual_order_message(self, count: int) -> Optional[Path]:
+        """Ikki tilli buyurtma xabari: o'zbek + rus (birlashtirilgan audio)"""
+        cache_key = f"bilingual_uz_ru_{count}"
+        text_hash = hashlib.md5(cache_key.encode()).hexdigest()
+        combined_path = self.cache_dir / f"{text_hash}.wav"
+
+        if combined_path.exists() and combined_path.stat().st_size > 0:
+            return combined_path
+
+        uz_path = await self.generate_order_message(count, lang="uz")
+        ru_path = await self.generate_order_message(count, lang="ru")
+
+        if not uz_path or not ru_path:
+            logger.error(f"Ikki tilli audio: uz={uz_path}, ru={ru_path}")
+            return uz_path or ru_path
+
+        success = await self._concat_audio([uz_path, ru_path], combined_path)
+        if not success or not combined_path.exists() or combined_path.stat().st_size == 0:
+            logger.error("Ikki tilli audio birlashtirish muvaffaqiyatsiz, faqat o'zbekcha qaytariladi")
+            return uz_path
+
+        logger.info(f"Ikki tilli audio yaratildi: {combined_path} ({combined_path.stat().st_size} bayt)")
+        return combined_path
 
     async def generate_planned_message(self, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Reja eslatma xabarini tilga qarab olish/yaratish"""
@@ -326,6 +373,15 @@ class TTSService:
                     created += 1
                 else:
                     logger.error(f"Order audio yaratilmadi: lang={lang}, count={i}")
+
+        # Ikki tilli (uz+ru) buyurtma audiolari (1-50)
+        logger.info("Ikki tilli (uz+ru) audio oldindan yaratilmoqda...")
+        for i in range(1, MAX_PREGENERATE + 1):
+            result = await self.generate_bilingual_order_message(i)
+            if result:
+                created += 1
+            else:
+                logger.error(f"Ikki tilli audio yaratilmadi: count={i}")
 
         # Natija hisoboti
         import glob
