@@ -98,6 +98,7 @@ class AutodialerAPI:
         # Stats
         r.add_get("/api/autodialer/stats", self.get_stats)
         r.add_get("/api/autodialer/calls", self.get_calls)
+        r.add_get("/api/autodialer/call-attempts", self.get_call_attempts)
         r.add_get("/api/autodialer/orders", self.get_orders)
         r.add_get("/api/autodialer/daily-trend", self.get_daily_trend)
         r.add_get("/api/autodialer/order-statuses", self.get_order_statuses)
@@ -216,6 +217,88 @@ class AutodialerAPI:
         s = self._stats.get_period_stats(period)
         records = list(reversed(s.call_records))
         return self._paginated(records, page, page_size)
+
+    async def get_call_attempts(self, request):
+        """
+        Qo'ng'iroq urinishlari — real-time holat + tarixiy statistika.
+
+        GET /api/autodialer/call-attempts?period=daily&page=1&page_size=20
+
+        Javob:
+          live     — hozirgi qo'ng'iroq holati (real-time)
+          summary  — urinishlar soni bo'yicha yig'indilar
+          records  — har bir qo'ng'iroq uchun urinishlar detali (sahifalangan)
+        """
+        period = request.query.get("period", "daily")
+        page = _safe_int(request.query, "page", 1, 1, 1000)
+        page_size = _safe_int(request.query, "page_size", 20, 1, 100)
+
+        # ── Real-time holat ──
+        live = {
+            "call_in_progress": False,
+            "waiting_for_call": False,
+            "current_attempt": 0,
+            "pending_orders": 0,
+            "unanswered_sellers": [],
+        }
+        if self.autodialer:
+            st = self.autodialer.state
+            live = {
+                "call_in_progress": st.call_in_progress,
+                "waiting_for_call": st.waiting_for_call,
+                "current_attempt": st.call_attempts,
+                "pending_orders": len(st.pending_order_ids),
+                "unanswered_sellers": list(st.unanswered_sellers),
+            }
+
+        # ── Tarixiy statistika ──
+        if not self._stats:
+            return self._ok({
+                "live": live,
+                "summary": {"total": 0, "answered": 0, "unanswered": 0,
+                            "by_attempts": {"1": 0, "2": 0, "3+": 0}},
+                "records": [], "total": 0, "page": page, "total_pages": 0,
+            })
+
+        s = self._stats.get_period_stats(period)
+        all_records = list(reversed(s.call_records))
+
+        # Urinishlar bo'yicha guruhlash
+        by_attempts = {"1": 0, "2": 0, "3+": 0}
+        for r in all_records:
+            att = r.get("attempts", 1)
+            if att == 1:
+                by_attempts["1"] += 1
+            elif att == 2:
+                by_attempts["2"] += 1
+            else:
+                by_attempts["3+"] += 1
+
+        summary = {
+            "total": s.total_calls,
+            "answered": s.answered_calls,
+            "unanswered": s.unanswered_calls,
+            "answer_rate": round(s.answered_calls / s.total_calls * 100, 1) if s.total_calls else 0,
+            "by_attempts": by_attempts,
+            "calls_1_attempt": s.calls_1_attempt,
+            "calls_2_attempts": s.calls_2_attempts,
+            "calls_3_attempts": s.calls_3_attempts,
+        }
+
+        # Sahifalash
+        total = len(all_records)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        page_records = all_records[start:start + page_size]
+
+        return self._ok({
+            "live": live,
+            "summary": summary,
+            "records": page_records,
+            "total": total,
+            "page": page,
+            "total_pages": total_pages,
+        })
 
     async def get_orders(self, request):
         """Buyurtmalar ro'yxati"""
