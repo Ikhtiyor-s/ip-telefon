@@ -651,14 +651,14 @@ class AutodialerPro:
 
         secret = os.getenv("NONBOR_SECRET", "")
         payload = {
-            "phone":          call.get("phone", ""),
-            "answered":       call.get("answered", False),
-            "duration":       call.get("duration_seconds", 0),
-            "wait_seconds":   call.get("wait_seconds", 0),
-            "direction":      call.get("direction", "outbound"),
-            "context":        call.get("context", ""),
-            "started_at":     call.get("started_at", ""),
-            "callerid_name":  call.get("callerid_name", ""),
+            "phone":        call.get("phone", ""),
+            "answered":     call.get("answered", False),
+            "duration":     call.get("duration_seconds", 0),
+            "wait_seconds": call.get("wait_seconds", 0),
+            "direction":    call.get("direction", "outbound"),
+            "context":      call.get("context", ""),
+            "started_at":   call.get("started_at", ""),
+            "operator":     call.get("operator", ""),   # xodim (ichki raqam/ismi)
         }
         try:
             import aiohttp as _aio

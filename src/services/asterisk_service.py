@@ -909,70 +909,133 @@ _AUTODIALER_CONTEXTS = frozenset({
 
 class CallTracker:
     """
-    Barcha Sarkor qo'ng'iroqlarini kuzatish.
+    Barcha Sarkor qo'ng'iroqlarini kuzatish — LinkedID asosida.
 
-    AMI eventlari orqali har bir qo'ng'iroqning:
-      - boshlanish vaqti (Newchannel)
-      - javob berilgan vaqti (ChannelStateChange Up)
-      - tugash vaqti + davomiyligi (Hangup)
-    aniqlanadi va on_call_completed(data) callback chaqiriladi.
+    LinkedID: Asterisk har bir "qo'ng'iroq" uchun bitta ID beradi.
+    Bridged qo'ng'iroqlarda (trunk + operator) ikkala kanal
+    bir xil LinkedID'ga ega — shuning uchun BIR MARTA yoziladi.
 
-    Autodialer kontekstidagi qo'ng'iroqlar o'tkazib yuboriladi
-    (ular record_call() orqali allaqachon yoziladi).
+    Qo'ng'iroq ma'lumotlari:
+      - phone       — tashqi raqam (mijoz)
+      - operator    — ichki raqam yoki nomi (xodim)
+      - direction   — inbound/outbound
+      - started_at  — boshlanish vaqti
+      - answered    — javob berilganmi
+      - wait_seconds     — ring vaqti
+      - duration_seconds — gaplashish vaqti
+
+    Autodialer qo'ng'iroqlari (autodialer-dynamic/ivr) o'tkazib yuboriladi —
+    ular record_call() orqali allaqachon yoziladi.
     """
 
     def __init__(self, ami: AsteriskAMI, on_call_completed: Callable = None):
         self._ami = ami
         self._on_completed = on_call_completed
-        # {uniqueid: {channel, callerid, callerid_name, context,
-        #             direction, started_at, answered_at}}
-        self._channels: Dict[str, dict] = {}
+
+        # LinkedID → qo'ng'iroq holati
+        # {linked_id: {uid_count, channels, phone, operator, ...}}
+        self._calls: Dict[str, dict] = {}
+        # uid → linked_id xaritalash
+        self._uid_to_linked: Dict[str, str] = {}
 
         ami.on_event("Newchannel",        self._on_new_channel)
         ami.on_event("ChannelStateChange", self._on_state_change)
         ami.on_event("Hangup",            self._on_hangup)
-        logger.info("CallTracker ishga tushdi — barcha Sarkor qo'ng'iroqlari kuzatiladi")
+        logger.info("CallTracker ishga tushdi (LinkedID rejimi — har qo'ng'iroq bir marta)")
+
+    @staticmethod
+    def _is_external(callerid: str) -> bool:
+        """Tashqi raqammi (9-12 raqam) yoki ichki extension (1-4 raqam)?"""
+        digits = re.sub(r"[^\d]", "", callerid)
+        return len(digits) >= 7
 
     async def _on_new_channel(self, data: dict):
-        uid = data.get("Uniqueid", "")
+        uid     = data.get("Uniqueid", "")
+        linked  = data.get("Linkedid", uid)   # bo'sh bo'lsa uid ishlatiladi
+        channel = data.get("Channel", "")
+        ctx     = data.get("Context", "")
+        callerid      = data.get("CallerIDNum", "")
+        callerid_name = data.get("CallerIDName", "")
+
         if not uid:
             return
-        ctx = data.get("Context", "")
-        channel = data.get("Channel", "")
-        # Faqat Sarkor kanallarini kuzatish (PJSIP/.../sarkor)
         if "PJSIP/" not in channel and "SIP/" not in channel:
             return
-        self._channels[uid] = {
-            "uniqueid": uid,
-            "channel": channel,
-            "callerid":      data.get("CallerIDNum", ""),
-            "callerid_name": data.get("CallerIDName", ""),
-            "context": ctx,
-            "exten":   data.get("Exten", ""),
-            "started_at":  datetime.now(),
-            "answered_at": None,
-        }
+
+        self._uid_to_linked[uid] = linked
+
+        if linked not in self._calls:
+            # Yangi qo'ng'iroq
+            self._calls[linked] = {
+                "linked_id":   linked,
+                "uid_count":   0,
+                "context":     ctx,
+                "phone":       "",        # tashqi raqam
+                "operator":    "",        # ichki raqam/nomi
+                "direction":   "outbound",
+                "started_at":  datetime.now(),
+                "answered_at": None,
+            }
+
+        entry = self._calls[linked]
+        entry["uid_count"] += 1
+
+        # Tashqi raqamni aniqlash
+        if self._is_external(callerid):
+            if not entry["phone"]:
+                entry["phone"] = callerid
+            # Kiruvchi: tashqi raqam CallerIDNum da → inbound
+            if ctx.startswith("from-") or not ctx.startswith("autodialer"):
+                entry["direction"] = "inbound"
+        else:
+            # Ichki kanal (operator)
+            if not entry["operator"]:
+                name = callerid_name.strip()
+                entry["operator"] = name if name and name != "<unknown>" else callerid
+
+        # Outbound: tashqi raqam extension'da (dial qilingan)
+        exten = data.get("Exten", "")
+        if self._is_external(exten) and not entry["phone"]:
+            entry["phone"] = exten
+            entry["direction"] = "outbound"
 
     async def _on_state_change(self, data: dict):
-        if data.get("ChannelState") != "6":    # 6 = Up (answered)
+        if data.get("ChannelState") != "6":
             return
-        uid = data.get("Uniqueid", "")
-        if uid in self._channels and not self._channels[uid]["answered_at"]:
-            self._channels[uid]["answered_at"] = datetime.now()
+        uid    = data.get("Uniqueid", "")
+        linked = self._uid_to_linked.get(uid)
+        if linked and linked in self._calls:
+            entry = self._calls[linked]
+            if not entry["answered_at"]:
+                entry["answered_at"] = datetime.now()
 
     async def _on_hangup(self, data: dict):
-        uid = data.get("Uniqueid", "")
-        call = self._channels.pop(uid, None)
+        uid    = data.get("Uniqueid", "")
+        linked = self._uid_to_linked.pop(uid, None)
+        if not linked or linked not in self._calls:
+            return
+
+        entry = self._calls[linked]
+        entry["uid_count"] -= 1
+
+        # Barcha kanallar yopilmasa kutamiz
+        if entry["uid_count"] > 0:
+            return
+
+        # So'nggi kanal — qo'ng'iroq to'liq tugadi
+        call = self._calls.pop(linked, None)
         if not call or not self._on_completed:
             return
 
-        ctx = call["context"]
-
-        # Autodialer kontekstlari — allaqachon record_call() da yoziladi
-        if ctx in _AUTODIALER_CONTEXTS:
+        # Autodialer kontekstlari o'tkazib yuboriladi
+        if call["context"] in _AUTODIALER_CONTEXTS:
             return
 
-        now = datetime.now()
+        # Telefon raqami yo'q bo'lsa — ichki qo'ng'iroq, logga kerak emas
+        if not call["phone"]:
+            return
+
+        now         = datetime.now()
         answered_at = call.get("answered_at")
         started_at  = call["started_at"]
 
@@ -984,13 +1047,11 @@ class CallTracker:
             duration_seconds = 0
 
         result = {
-            "uniqueid":        uid,
-            "channel":         call["channel"],
-            "phone":           call["callerid"],
-            "callerid_name":   call["callerid_name"],
-            "context":         ctx,
-            "exten":           call["exten"],
-            "direction":       "inbound" if ctx.startswith("from-") else "outbound",
+            "linked_id":       linked,
+            "phone":           call["phone"],
+            "operator":        call["operator"],
+            "direction":       call["direction"],
+            "context":         call["context"],
             "started_at":      started_at.isoformat(),
             "answered":        answered_at is not None,
             "wait_seconds":    wait_seconds,
@@ -999,7 +1060,7 @@ class CallTracker:
 
         logger.info(
             f"CallTracker: {result['direction']} | "
-            f"{result['phone']} | "
+            f"{result['phone']} ↔ {result['operator'] or '-'} | "
             f"{'JAVOB' if result['answered'] else 'javobsiz'} | "
             f"ring={wait_seconds}s talk={duration_seconds}s"
         )
