@@ -7,7 +7,7 @@ import logging
 import asyncio
 import re
 from datetime import datetime
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -77,7 +77,7 @@ class AsteriskAMI:
         self._connected = False
         self._action_id = 0
         self._pending_actions: Dict[str, asyncio.Future] = {}
-        self._event_handlers: Dict[str, Callable] = {}
+        self._event_handlers: Dict[str, list] = {}   # bir event → ko'p handler
         self._read_task: Optional[asyncio.Task] = None
         self._ping_task: Optional[asyncio.Task] = None
 
@@ -368,12 +368,15 @@ class AsteriskAMI:
         # Event
         if "Event" in data:
             event_name = data["Event"]
-            if event_name in self._event_handlers:
-                await self._event_handlers[event_name](data)
+            for handler in self._event_handlers.get(event_name, []):
+                try:
+                    await handler(data)
+                except Exception as e:
+                    logger.error(f"AMI event handler xatosi [{event_name}]: {e}", exc_info=True)
 
     def on_event(self, event_name: str, handler: Callable):
-        """Event handler qo'shish"""
-        self._event_handlers[event_name] = handler
+        """Event handler qo'shish (bir event uchun bir nechta handler mumkin)"""
+        self._event_handlers.setdefault(event_name, []).append(handler)
 
     def _windows_to_wsl_path(self, windows_path: str) -> str:
         """Windows pathni WSL pathga convert qilish"""
@@ -893,3 +896,115 @@ class CallManager:
             await asyncio.sleep(2)  # 2 soniya kutish
             logger.debug("Qo'ng'iroq to'liq tugadi, davom etish mumkin")
             return self._last_call_result or CallResult(status=CallStatus.FAILED)
+
+
+# ─── Kontekstlar: autodialer o'zi loglaydigan qo'ng'iroqlar ───────────────────
+# Bu kontekstlardagi qo'ng'iroqlar CallTracker tomonidan IKKI MARTA yozilmaydi
+# (ular record_call() orqali allaqachon yoziladi)
+_AUTODIALER_CONTEXTS = frozenset({
+    "autodialer-dynamic",
+    "autodialer-ivr",
+})
+
+
+class CallTracker:
+    """
+    Barcha Sarkor qo'ng'iroqlarini kuzatish.
+
+    AMI eventlari orqali har bir qo'ng'iroqning:
+      - boshlanish vaqti (Newchannel)
+      - javob berilgan vaqti (ChannelStateChange Up)
+      - tugash vaqti + davomiyligi (Hangup)
+    aniqlanadi va on_call_completed(data) callback chaqiriladi.
+
+    Autodialer kontekstidagi qo'ng'iroqlar o'tkazib yuboriladi
+    (ular record_call() orqali allaqachon yoziladi).
+    """
+
+    def __init__(self, ami: AsteriskAMI, on_call_completed: Callable = None):
+        self._ami = ami
+        self._on_completed = on_call_completed
+        # {uniqueid: {channel, callerid, callerid_name, context,
+        #             direction, started_at, answered_at}}
+        self._channels: Dict[str, dict] = {}
+
+        ami.on_event("Newchannel",        self._on_new_channel)
+        ami.on_event("ChannelStateChange", self._on_state_change)
+        ami.on_event("Hangup",            self._on_hangup)
+        logger.info("CallTracker ishga tushdi — barcha Sarkor qo'ng'iroqlari kuzatiladi")
+
+    async def _on_new_channel(self, data: dict):
+        uid = data.get("Uniqueid", "")
+        if not uid:
+            return
+        ctx = data.get("Context", "")
+        channel = data.get("Channel", "")
+        # Faqat Sarkor kanallarini kuzatish (PJSIP/.../sarkor)
+        if "PJSIP/" not in channel and "SIP/" not in channel:
+            return
+        self._channels[uid] = {
+            "uniqueid": uid,
+            "channel": channel,
+            "callerid":      data.get("CallerIDNum", ""),
+            "callerid_name": data.get("CallerIDName", ""),
+            "context": ctx,
+            "exten":   data.get("Exten", ""),
+            "started_at":  datetime.now(),
+            "answered_at": None,
+        }
+
+    async def _on_state_change(self, data: dict):
+        if data.get("ChannelState") != "6":    # 6 = Up (answered)
+            return
+        uid = data.get("Uniqueid", "")
+        if uid in self._channels and not self._channels[uid]["answered_at"]:
+            self._channels[uid]["answered_at"] = datetime.now()
+
+    async def _on_hangup(self, data: dict):
+        uid = data.get("Uniqueid", "")
+        call = self._channels.pop(uid, None)
+        if not call or not self._on_completed:
+            return
+
+        ctx = call["context"]
+
+        # Autodialer kontekstlari — allaqachon record_call() da yoziladi
+        if ctx in _AUTODIALER_CONTEXTS:
+            return
+
+        now = datetime.now()
+        answered_at = call.get("answered_at")
+        started_at  = call["started_at"]
+
+        if answered_at:
+            wait_seconds     = max(0, int((answered_at - started_at).total_seconds()))
+            duration_seconds = max(0, int((now - answered_at).total_seconds()))
+        else:
+            wait_seconds     = max(0, int((now - started_at).total_seconds()))
+            duration_seconds = 0
+
+        result = {
+            "uniqueid":        uid,
+            "channel":         call["channel"],
+            "phone":           call["callerid"],
+            "callerid_name":   call["callerid_name"],
+            "context":         ctx,
+            "exten":           call["exten"],
+            "direction":       "inbound" if ctx.startswith("from-") else "outbound",
+            "started_at":      started_at.isoformat(),
+            "answered":        answered_at is not None,
+            "wait_seconds":    wait_seconds,
+            "duration_seconds": duration_seconds,
+        }
+
+        logger.info(
+            f"CallTracker: {result['direction']} | "
+            f"{result['phone']} | "
+            f"{'JAVOB' if result['answered'] else 'javobsiz'} | "
+            f"ring={wait_seconds}s talk={duration_seconds}s"
+        )
+
+        try:
+            await self._on_completed(result)
+        except Exception as e:
+            logger.error(f"CallTracker callback xatosi: {e}", exc_info=True)

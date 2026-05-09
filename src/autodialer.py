@@ -45,6 +45,7 @@ from services import (
     AsteriskAMI,
     CallManager,
     CallStatus,
+    CallTracker,
     TelegramService,
     TelegramNotificationManager,
     TelegramStatsHandler,
@@ -304,6 +305,12 @@ class AutodialerPro:
             ami=self.ami,
             max_attempts=max_call_attempts,
             retry_interval=retry_interval
+        )
+
+        # Barcha Sarkor qo'ng'iroqlarini kuzatish (admin, test, kiruvchi)
+        self.call_tracker = CallTracker(
+            ami=self.ami,
+            on_call_completed=self._on_sarkor_call_completed,
         )
 
         # Statistika servisi
@@ -630,6 +637,47 @@ class AutodialerPro:
         ))
 
         return {"success": True, "phone": phone, "language": lang, "business": biz.get("title", "")}
+
+    async def _on_sarkor_call_completed(self, call: dict):
+        """Sarkor orqali o'tgan qo'ng'iroq tugadi — admin.nonbor ga yuborish.
+
+        Bu yerda: admin qo'ng'iroqlari, test qo'ng'iroqlari, kiruvchi qo'ng'iroqlar.
+        Autodialer qo'ng'iroqlari (autodialer-dynamic) bu yerga KELMAYDI —
+        ular record_call() orqali yoziladi.
+        """
+        report_url = os.getenv("CALL_REPORT_URL", "").strip()
+        if not report_url:
+            return
+
+        secret = os.getenv("NONBOR_SECRET", "")
+        payload = {
+            "phone":          call.get("phone", ""),
+            "answered":       call.get("answered", False),
+            "duration":       call.get("duration_seconds", 0),
+            "wait_seconds":   call.get("wait_seconds", 0),
+            "direction":      call.get("direction", "outbound"),
+            "context":        call.get("context", ""),
+            "started_at":     call.get("started_at", ""),
+            "callerid_name":  call.get("callerid_name", ""),
+        }
+        try:
+            import aiohttp as _aio
+            timeout = _aio.ClientTimeout(total=8)
+            async with _aio.ClientSession() as sess:
+                async with sess.post(
+                    report_url,
+                    json=payload,
+                    headers={"X-Telegram-Bot-Secret": secret},
+                    timeout=timeout,
+                ) as resp:
+                    logger.info(
+                        f"CallTracker → admin.nonbor: "
+                        f"{call['phone']} | "
+                        f"{'JAVOB' if call['answered'] else 'javobsiz'} | "
+                        f"HTTP {resp.status}"
+                    )
+        except Exception as e:
+            logger.warning(f"CallTracker report xatosi: {e}")
 
     async def start(self):
         """Autodialer ni ishga tushirish"""
