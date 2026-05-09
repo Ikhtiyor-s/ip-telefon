@@ -194,6 +194,18 @@ class AdminCallService:
                 self._daily_task.cancel()
                 logger.info("Admin: kunlik hisobot O'CHIRILDI")
 
+        # API health monitoring
+        if self.config.get("api_health_enabled", True):
+            if not self._api_health_task or self._api_health_task.done():
+                self._api_health_task = asyncio.create_task(self._api_health_loop())
+                logger.info("Admin: API health monitoring YOQILDI")
+        else:
+            if self._api_health_task and not self._api_health_task.done():
+                self._api_health_task.cancel()
+                self._api_down = False
+                self._api_down_since = None
+                logger.info("Admin: API health monitoring O'CHIRILDI")
+
     async def stop(self):
         self._running = False
         self._stop_task(self._check_task)
