@@ -65,15 +65,20 @@ def _is_safe_url(url: str) -> bool:
 class WebhookService:
     """
     Webhook tizimini boshqaradi:
-      - webhook ro'yxatga olish / o'chirish / ko'rsatish
+      - webhook ro'yxatga olish / o'chirish / ko'rsatish  (tashqi, SSRF-himoyali)
       - eventlar yuz berganda HTTP POST yuborish
+      - CALL_REPORT_URL: ichki admin.nonbor uchun ishonchli kanal (.env orqali)
     """
 
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "data", trusted_report_url: str = ""):
         self._path = Path(data_dir) / "webhooks.json"
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._webhooks: list[dict] = []
+        # CALL_REPORT_URL — env var orqali berilgan ichki URL (SSRF tekshiruvisiz)
+        self._trusted_url = trusted_report_url.strip() if trusted_report_url else ""
         self._load()
+        if self._trusted_url:
+            logger.info(f"WebhookService: ichki report URL sozlangan → {self._trusted_url}")
         logger.info(f"WebhookService ishga tushdi ({len(self._webhooks)} ta webhook)")
 
     # ─── persistence ──────────────────────────────────────────────────────────
@@ -153,10 +158,8 @@ class WebhookService:
             logger.warning(f"Webhook scheduleda event loop topilmadi: {event}")
 
     async def fire_event(self, event: str, data: dict):
-        """Barcha mos webhook'larga event yuboradi."""
+        """Barcha mos webhook'larga + ichki admin URL ga event yuboradi."""
         targets = [w for w in self._webhooks if w.get("active") and event in w.get("events", [])]
-        if not targets:
-            return
 
         payload = json.dumps({
             "event": event,
@@ -166,7 +169,38 @@ class WebhookService:
 
         async with aiohttp.ClientSession() as session:
             tasks = [self._send(session, w, event, payload) for w in targets]
-            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Ichki admin.nonbor URL — SSRF tekshiruvisiz (env var = ishonchli)
+            if self._trusted_url and event in ("call.completed", "order.updated"):
+                tasks.append(self._send_trusted(session, event, payload))
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _send_trusted(self, session: aiohttp.ClientSession, event: str, payload: str):
+        """admin.nonbor uchun ichki kanal — SSRF himoyasisiz, env var orqali sozlangan."""
+        import os
+        api_secret = os.getenv("API_SECRET_KEY", "")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Webhook-Event": event,
+            "User-Agent": "AutodialerWebhook/1.0",
+        }
+        if api_secret:
+            headers["X-API-Key"] = api_secret
+        try:
+            async with session.post(
+                self._trusted_url,
+                data=payload,
+                headers=headers,
+                timeout=_TIMEOUT,
+            ) as resp:
+                if resp.status < 300:
+                    logger.info(f"Admin report OK [{event}] → {resp.status}")
+                else:
+                    logger.warning(f"Admin report xato [{event}] → HTTP {resp.status}")
+        except Exception as e:
+            logger.warning(f"Admin report yuborishda xato [{event}]: {e}")
 
     async def _send(self, session: aiohttp.ClientSession, webhook: dict, event: str, payload: str):
         headers = {

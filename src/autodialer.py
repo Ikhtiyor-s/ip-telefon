@@ -319,7 +319,10 @@ class AutodialerPro:
         self._planned_reminders_file = project_root / "data" / "planned_reminders.json"
         self._load_planned_reminders()
 
-        self.webhook_service = WebhookService(data_dir=data_dir)
+        self.webhook_service = WebhookService(
+            data_dir=data_dir,
+            trusted_report_url=os.getenv("CALL_REPORT_URL", ""),
+        )
         self.stats = StatsService(data_dir=data_dir, webhook_service=self.webhook_service)
 
         if telegram_token:
