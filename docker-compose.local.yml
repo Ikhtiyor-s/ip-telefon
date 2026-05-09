@@ -24,6 +24,7 @@ services:
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.local.conf:/etc/asterisk/manager.conf:ro
       - autodialer-audio:/tmp/autodialer-audio
+      - call-recordings:/var/spool/asterisk/recording
       - asterisk-logs:/var/log/asterisk
     environment:
       - TZ=Asia/Tashkent
@@ -50,6 +51,7 @@ services:
       - "8585:8585"
     volumes:
       - autodialer-audio:/app/audio
+      - call-recordings:/app/recordings
       - ./src:/app/src
       - ./config:/app/config
       - ./logs:/app/logs
@@ -61,4 +63,5 @@ services:
 
 volumes:
   autodialer-audio:
+  call-recordings:
   asterisk-logs:

@@ -12,7 +12,10 @@ services:
       - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.conf:/etc/asterisk/manager.conf:ro
+      # Audio: autodialer yozadi → Asterisk o'qiydi (shared volume)
       - autodialer-audio:/var/lib/asterisk/sounds/autodialer
+      # Yozuvlar: Asterisk yozadi → autodialer o'qiydi (shared volume)
+      - call-recordings:/var/spool/asterisk/recording
     env_file:
       - .env.production
     environment:
@@ -37,6 +40,8 @@ services:
         condition: service_healthy
     volumes:
       - autodialer-audio:/app/audio
+      # Yozuvlar: Asterisk yozgan fayllarni autodialer API orqali uzatadi
+      - call-recordings:/app/recordings
       - ./logs:/app/logs
       - ./data:/app/data
     env_file:
@@ -46,3 +51,4 @@ services:
 
 volumes:
   autodialer-audio:
+  call-recordings:
