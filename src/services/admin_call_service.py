@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
+import aiohttp
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
@@ -28,6 +30,12 @@ DEFAULT_CONFIG = {
     "work_hours_start": "08:00",
     "work_hours_end": "22:00",
     "known_checking_biz_ids": [],
+    # Nonbor API health monitoring
+    "api_health_enabled": True,
+    "api_health_check_interval": 60,    # har 60 soniyada tekshirish
+    "api_health_call_interval": 300,    # API o'chiq bo'lganda har 5 daqiqada qayta qo'ng'iroq
+    "api_health_timeout": 10,           # HTTP timeout soniyada
+    "api_health_language": "uz",
 }
 
 
@@ -48,8 +56,14 @@ class AdminCallService:
         self._known_biz_ids = set(self.config.get("known_checking_biz_ids", []))
         self._check_task: Optional[asyncio.Task] = None
         self._daily_task: Optional[asyncio.Task] = None
+        self._api_health_task: Optional[asyncio.Task] = None
         self._running = False
         self._night_new_count = 0  # Tunda topilgan yangi bizneslar soni
+
+        # API health state
+        self._api_down: bool = False
+        self._api_down_since: Optional[datetime] = None
+        self._api_last_called_at: Optional[datetime] = None
 
         logger.info(f"AdminCallService yaratildi: {len(self.config['admin_phones'])} ta admin raqam")
 
@@ -148,6 +162,10 @@ class AdminCallService:
             if not self._daily_task or self._daily_task.done():
                 self._daily_task = asyncio.create_task(self._daily_report_loop())
                 logger.info(f"Admin: kunlik hisobot boshlandi ({self.config['daily_report_time']})")
+        if self.config.get("api_health_enabled", True):
+            if not self._api_health_task or self._api_health_task.done():
+                self._api_health_task = asyncio.create_task(self._api_health_loop())
+                logger.info("Admin: Nonbor API health monitoring boshlandi")
 
     def _stop_task(self, task):
         if task and not task.done():
@@ -180,6 +198,7 @@ class AdminCallService:
         self._running = False
         self._stop_task(self._check_task)
         self._stop_task(self._daily_task)
+        self._stop_task(self._api_health_task)
 
     # ── Yangi biznes tekshirish ──
 
@@ -352,6 +371,105 @@ class AdminCallService:
         results = await asyncio.gather(*[call_one(p) for p in phones])
         answered = sum(1 for r in results if r)
         logger.info(f"Admin parallel [{purpose}]: {answered}/{len(phones)} javob berdi")
+
+    # ── Nonbor API Health Monitoring ──
+
+    async def _api_health_loop(self):
+        """Har N soniyada Nonbor API ni tekshirish. Javob bermasa adminga qo'ng'iroq."""
+        await asyncio.sleep(30)  # Startup kutish
+        logger.info("Admin: API health loop boshlandi")
+
+        while self._running:
+            try:
+                await self._check_nonbor_api()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"API health check xatosi: {e}", exc_info=True)
+
+            interval = self.config.get("api_health_check_interval", 60)
+            await asyncio.sleep(interval)
+
+    async def _check_nonbor_api(self):
+        """Nonbor API ga so'rov yuborib, javob bor-yo'qligini tekshirish."""
+        url = os.getenv("NONBOR_BASE_URL", "").rstrip("/")
+        if not url:
+            return
+
+        # Health URL: /api/v2/... → domain/api/v2/telegram_bot/businesses/accepted/
+        check_url = f"{url}/telegram_bot/businesses/accepted/"
+        secret = os.getenv("NONBOR_SECRET", "")
+        timeout = aiohttp.ClientTimeout(total=self.config.get("api_health_timeout", 10))
+
+        is_ok = False
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    check_url,
+                    headers={"X-Telegram-Bot-Secret": secret},
+                    timeout=timeout,
+                ) as resp:
+                    is_ok = resp.status < 500
+        except Exception as e:
+            logger.warning(f"API health check muvaffaqiyatsiz: {e}")
+            is_ok = False
+
+        if is_ok:
+            if self._api_down:
+                # Tiklandi
+                down_minutes = self._down_minutes()
+                logger.info(f"Nonbor API TIKLANDI — {down_minutes} daqiqa o'chiq edi")
+                self._api_down = False
+                self._api_down_since = None
+                self._api_last_called_at = None
+        else:
+            if not self._api_down:
+                # Yangi xato — birinchi marta
+                self._api_down = True
+                self._api_down_since = datetime.now()
+                logger.error(f"Nonbor API JAVOB BERMAYAPTI — qo'ng'iroq boshlanadi")
+                await self._call_api_down()
+            else:
+                # Hali ham o'chiq — qayta qo'ng'iroq intervalini tekshirish
+                call_interval = self.config.get("api_health_call_interval", 300)
+                if self._api_last_called_at is None or \
+                   (datetime.now() - self._api_last_called_at).total_seconds() >= call_interval:
+                    down_minutes = self._down_minutes()
+                    logger.warning(f"Nonbor API hali o'chiq ({down_minutes} daqiqa) — qayta qo'ng'iroq")
+                    await self._call_api_down()
+
+    def _down_minutes(self) -> int:
+        """API qancha daqiqadan beri o'chiq"""
+        if not self._api_down_since:
+            return 0
+        return max(1, int((datetime.now() - self._api_down_since).total_seconds() / 60))
+
+    async def _call_api_down(self):
+        """Adminga API o'chiq degan qo'ng'iroq"""
+        phones = self._get_enabled_phones()
+        if not phones:
+            logger.warning("API down: admin raqamlar yo'q, qo'ng'iroq qilinmadi")
+            return
+
+        lang = self.config.get("api_health_language", "uz")
+        minutes = self._down_minutes()
+
+        audio = await self.tts.generate_api_down_message(minutes, lang=lang)
+        if not audio:
+            logger.error("API down: TTS audio yaratilmadi")
+            return
+
+        self.ensure_for_asterisk_if_available(audio)
+        self._api_last_called_at = datetime.now()
+        logger.info(f"Admin API-down qo'ng'iroq: {minutes} daqiqa, {len(phones)} ta raqam")
+        await self._call_admins(str(audio), "api_down")
+
+    def ensure_for_asterisk_if_available(self, audio_path):
+        """TTS faylni Asterisk pathga ko'chirish (mavjud bo'lsa)"""
+        try:
+            self.tts.ensure_for_asterisk(audio_path)
+        except Exception:
+            pass
 
     # ── Test qo'ng'iroq ──
 

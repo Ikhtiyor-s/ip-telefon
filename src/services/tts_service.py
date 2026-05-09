@@ -64,6 +64,13 @@ ADMIN_DAILY_REPORT_MESSAGES = {
     "zh": "您好！Non-bor报告。{biz_count}个商家和{product_count}个产品待审核。",
 }
 
+# Admin: Nonbor API ishlamayapti
+ADMIN_API_DOWN_MESSAGES = {
+    "uz": "Diqqat! Nonbor API javob bermayapti. {minutes} daqiqadan beri ishlamayapti. Iltimos, tizimni tekshiring.",
+    "ru": "Внимание! Nonbor API не отвечает. Не работает уже {minutes} минут. Пожалуйста, проверьте систему.",
+    "en": "Warning! Nonbor API is not responding. It has been down for {minutes} minutes. Please check the system.",
+}
+
 # Admin: ertalabki hisobot — tunda yangi bizneslar bor
 ADMIN_MORNING_REPORT_MESSAGES = {
     "uz": "Assalomu alaykum! Non-bor ertalabki hisobot. Kechasi {night_count} ta yangi biznes qo'shildi. Platformada jami {biz_count} ta tasdiqlangan biznes bor.",
@@ -391,6 +398,17 @@ class TTSService:
         lang = _normalize_lang(lang)
         template = ADMIN_MORNING_REPORT_MESSAGES.get(lang) or ADMIN_MORNING_REPORT_MESSAGES[DEFAULT_LANG]
         return await self._synthesize_with_cache(template.format(biz_count=biz_count, night_count=night_count), lang)
+
+    async def generate_api_down_message(self, minutes: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
+        """Admin: Nonbor API ishlamayapti xabari"""
+        lang = _normalize_lang(lang)
+        template = ADMIN_API_DOWN_MESSAGES.get(lang) or ADMIN_API_DOWN_MESSAGES[DEFAULT_LANG]
+        text = template.format(minutes=minutes)
+        # Cache o'chirilsin — har safar yangi (minutes o'zgaradi)
+        cache_path = self._get_cache_path(text, lang)
+        if cache_path.exists():
+            cache_path.unlink()
+        return await self._synthesize_with_cache(text, lang)
 
     async def generate_admin_daily_report(self, biz_count: int, product_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Admin: kunlik hisobot"""
