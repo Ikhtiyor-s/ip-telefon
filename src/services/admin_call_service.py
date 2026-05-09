@@ -457,24 +457,59 @@ class AdminCallService:
         return max(1, int((datetime.now() - self._api_down_since).total_seconds() / 60))
 
     async def _call_api_down(self):
-        """Adminga API o'chiq degan qo'ng'iroq"""
+        """Adminga API o'chiq degan qo'ng'iroq.
+
+        Agar AUTODIALER_NOTIFY_URL sozlangan bo'lsa — Asterisk serveridagi
+        webhook listener'ga POST yuboriladi (u o'zi qo'ng'iroq qiladi).
+        Aks holda — to'g'ridan-to'g'ri AMI orqali qo'ng'iroq.
+        """
         phones = self._get_enabled_phones()
         if not phones:
             logger.warning("API down: admin raqamlar yo'q, qo'ng'iroq qilinmadi")
             return
 
-        lang = self.config.get("api_health_language", "uz")
+        self._api_last_called_at = datetime.now()
         minutes = self._down_minutes()
 
-        audio = await self.tts.generate_api_down_message(minutes, lang=lang)
-        if not audio:
-            logger.error("API down: TTS audio yaratilmadi")
-            return
+        notify_url = os.getenv("AUTODIALER_NOTIFY_URL", "").strip()
+        if notify_url:
+            await self._notify_asterisk_server(notify_url, phones, minutes)
+        else:
+            # To'g'ridan-to'g'ri AMI orqali
+            lang = self.config.get("api_health_language", "uz")
+            audio = await self.tts.generate_api_down_message(minutes, lang=lang)
+            if not audio:
+                logger.error("API down: TTS audio yaratilmadi")
+                return
+            self.ensure_for_asterisk_if_available(audio)
+            logger.info(f"Admin API-down qo'ng'iroq (AMI): {minutes} daqiqa, {len(phones)} ta raqam")
+            await self._call_admins(str(audio), "api_down")
 
-        self.ensure_for_asterisk_if_available(audio)
-        self._api_last_called_at = datetime.now()
-        logger.info(f"Admin API-down qo'ng'iroq: {minutes} daqiqa, {len(phones)} ta raqam")
-        await self._call_admins(str(audio), "api_down")
+    async def _notify_asterisk_server(self, url: str, phones: list, minutes: int):
+        """Asterisk serveridagi webhook listener'ga event yuborish."""
+        secret = os.getenv("WEBHOOK_SECRET", os.getenv("NONBOR_SECRET", ""))
+        payload = {
+            "event": "api_down",
+            "admin_phones": phones,
+            "down_minutes": minutes,
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={"X-Webhook-Secret": secret},
+                    timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        called = data.get("called", 0)
+                        logger.info(f"Asterisk server qo'ng'iroq qildi: {called}/{len(phones)} ta")
+                    else:
+                        logger.error(f"Asterisk server xatosi: HTTP {resp.status}")
+        except Exception as e:
+            logger.error(f"Asterisk server bilan bog'lanib bo'lmadi: {e}")
 
     def ensure_for_asterisk_if_available(self, audio_path):
         """TTS faylni Asterisk pathga ko'chirish (mavjud bo'lsa)"""

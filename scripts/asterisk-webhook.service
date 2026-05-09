@@ -1,0 +1,24 @@
+[Unit]
+Description=Autodialer Asterisk Webhook Listener
+After=network.target asterisk.service
+Requires=asterisk.service
+
+[Service]
+Type=simple
+User=asterisk
+WorkingDirectory=/opt/autodialer
+ExecStart=/usr/bin/python3 /opt/autodialer/asterisk_webhook_listener.py
+Restart=always
+RestartSec=5
+
+Environment=WEBHOOK_SECRET=nonbor-secret-key
+Environment=ALERT_AUDIO=/tmp/autodialer/api_alert
+Environment=SIP_ENDPOINT=sarkor-endpoint
+Environment=WEBHOOK_PORT=5000
+Environment=CALLER_ID=+998783331002
+
+# Faqat localhost dan va Docker network dan qabul qilish uchun
+# (iptables bilan ham cheklash mumkin)
+
+[Install]
+WantedBy=multi-user.target
