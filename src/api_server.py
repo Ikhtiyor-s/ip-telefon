@@ -9,6 +9,7 @@ restart qilmasdan boshqarish imkonini beradi.
 Port: 8585 (default)
 """
 
+import hmac
 import json
 import logging
 import os
@@ -77,8 +78,11 @@ class AutodialerAPI:
                     resp = ex
             else:
                 # API key tekshirish
+                # Bo'sh self.api_key = konfiguratsiya xatosi → barcha so'rovlarni rad et
                 api_key = request.headers.get("X-API-Key", "")
-                if api_key != self.api_key:
+                key_missing = not self.api_key
+                key_wrong = not hmac.compare_digest(api_key, self.api_key)
+                if key_missing or key_wrong:
                     resp = web.json_response(
                         {"success": False, "message": "API kalit noto'g'ri yoki berilmagan"},
                         status=401
@@ -707,7 +711,7 @@ class AutodialerAPI:
             "seller_phone": ad.seller_phone,
             "skip_asterisk": ad.skip_asterisk,
             "nonbor_base_url": nonbor_url,
-            "nonbor_secret": os.getenv("NONBOR_SECRET", ""),
+            "nonbor_secret": ("***" + os.getenv("NONBOR_SECRET", "")[-4:]) if os.getenv("NONBOR_SECRET") else "",
             "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", "")[:10] + "..." if os.getenv("TELEGRAM_BOT_TOKEN") else "",
             "telegram_chat_id": tg_chat_id,
             "ami_host": os.getenv("AMI_HOST", "127.0.0.1"),
@@ -755,6 +759,15 @@ class AutodialerAPI:
         # Nonbor API
         if "nonbor_base_url" in body:
             v = str(body["nonbor_base_url"]).strip()
+            # SSRF himoya: faqat https:// va ishonchli domenga ruxsat
+            from urllib.parse import urlparse as _urlparse
+            _parsed = _urlparse(v)
+            if _parsed.scheme not in ("http", "https") or not _parsed.hostname:
+                return self._err("nonbor_base_url noto'g'ri format (http/https kerak)")
+            # Ichki IP larni bloklash
+            from services.webhook_service import _is_safe_url
+            if not _is_safe_url(v):
+                return self._err("nonbor_base_url ichki tarmoq manziliga yo'naltirilgan")
             if ad.nonbor: ad.nonbor.base_url = v
             env_changes["NONBOR_BASE_URL"] = os.environ["NONBOR_BASE_URL"] = v
             changed.append(f"nonbor_base_url={v}")
@@ -782,11 +795,31 @@ class AutodialerAPI:
 
         return self._json({"success": True, "message": "O'zgarish yo'q"})
 
+    # Faqat shu kalitlarga .env yozish ruxsat etiladi
+    _ENV_ALLOWED_KEYS = frozenset({
+        "WAIT_BEFORE_CALL", "TELEGRAM_ALERT_TIME", "PLANNED_REMINDER_TIME",
+        "PLANNED_GROUP_ALERT_TIME", "MAX_CALL_ATTEMPTS", "RETRY_INTERVAL",
+        "TELEGRAM_CHAT_ID", "NONBOR_BASE_URL", "NONBOR_SECRET", "SELLER_PHONE",
+    })
+
     def _update_env_file(self, changes: dict):
         """
-        .env faylni yangilash — mavjud qiymatlarni o'zgartiradi,
-        yangilarini qo'shadi. Restart bo'lganda ham saqlanadi.
+        .env faylni yangilash — faqat ruxsat etilgan kalitlar,
+        newline injection himoyasi bilan.
         """
+        # Ruxsat etilmagan yoki xavfli qiymatlarni filtrlash
+        safe_changes = {}
+        for key, val in changes.items():
+            if key not in self._ENV_ALLOWED_KEYS:
+                logger.warning(f".env: ruxsatsiz kalit bloklandi: {key}")
+                continue
+            # Newline injection oldini olish
+            safe_val = str(val).replace("\n", "").replace("\r", "")
+            safe_changes[key] = safe_val
+
+        if not safe_changes:
+            return
+
         env_path = PROJECT_ROOT / ".env"
         try:
             lines = []
@@ -800,21 +833,20 @@ class AutodialerAPI:
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#") and "=" in stripped:
                     key = stripped.split("=", 1)[0].strip()
-                    if key in changes:
-                        new_lines.append(f"{key}={changes[key]}\n")
+                    if key in safe_changes:
+                        new_lines.append(f"{key}={safe_changes[key]}\n")
                         updated_keys.add(key)
                         continue
                 new_lines.append(line)
 
-            # Yangi kalitlarni qo'shish
-            for key, val in changes.items():
+            for key, val in safe_changes.items():
                 if key not in updated_keys:
                     new_lines.append(f"{key}={val}\n")
 
             with open(env_path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
 
-            logger.info(f".env yangilandi: {list(changes.keys())}")
+            logger.info(f".env yangilandi: {list(safe_changes.keys())}")
         except Exception as e:
             logger.error(f".env yangilashda xato: {e}")
 
