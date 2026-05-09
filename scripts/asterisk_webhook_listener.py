@@ -34,7 +34,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("asterisk_webhook")
 
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "nonbor-secret-key")
+# Bot X-Telegram-Bot-Secret header yuboradi → EXTERNAL_API_SECRET bilan bir xil
+WEBHOOK_SECRET = os.getenv("EXTERNAL_API_SECRET", os.getenv("WEBHOOK_SECRET", "nonbor-secret-key"))
 ALERT_AUDIO    = os.getenv("ALERT_AUDIO", "/tmp/autodialer/api_alert")
 SIP_ENDPOINT   = os.getenv("SIP_ENDPOINT", "sarkor-endpoint")
 WEBHOOK_PORT   = int(os.getenv("WEBHOOK_PORT", "5000"))
@@ -88,7 +89,11 @@ def _originate(phone: str) -> bool:
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         # ── Auth ──────────────────────────────────────────────────────────────
-        secret = self.headers.get("X-Webhook-Secret", "")
+        # Bot X-Telegram-Bot-Secret header yuboradi
+        secret = (
+            self.headers.get("X-Telegram-Bot-Secret", "")
+            or self.headers.get("X-Webhook-Secret", "")
+        )
         if secret != WEBHOOK_SECRET:
             self._respond(401, {"error": "unauthorized"})
             logger.warning(f"Ruxsatsiz so'rov: {self.client_address[0]}")
@@ -107,12 +112,17 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         # ── Eventlarni qayta ishlash ──────────────────────────────────────────
         if event == "api_down":
-            phones: List[str] = body.get("admin_phones", [])
-            if isinstance(phones, str):
-                phones = [phones]
+            # Bot: admin_phone (string) yoki admin_phones (array) yuborishi mumkin
+            raw = body.get("admin_phones") or body.get("admin_phone", "")
+            if isinstance(raw, list):
+                phones: List[str] = raw
+            elif isinstance(raw, str) and raw:
+                phones = [raw]
+            else:
+                phones = []
 
-            minutes = body.get("down_minutes", 0)
-            logger.warning(f"API down ({minutes} daqiqa) — {len(phones)} ta adminga qo'ng'iroq")
+            reason   = body.get("reason", "")
+            logger.warning(f"API down — {reason} | {len(phones)} ta adminga qo'ng'iroq")
 
             called = 0
             for phone in phones:
