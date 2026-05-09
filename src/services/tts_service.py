@@ -400,15 +400,52 @@ class TTSService:
         return await self._synthesize_with_cache(template.format(biz_count=biz_count, night_count=night_count), lang)
 
     async def generate_api_down_message(self, minutes: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
-        """Admin: Nonbor API ishlamayapti xabari"""
+        """Admin: Nonbor API ishlamayapti xabari.
+
+        Barqaror nom: api_alert_{lang}.wav — Asterisk pathga to'g'ridan-to'g'ri saqlanadi.
+        Har chaqiruvda qayta yaratiladi (minutes o'zgaradi).
+        """
         lang = _normalize_lang(lang)
         template = ADMIN_API_DOWN_MESSAGES.get(lang) or ADMIN_API_DOWN_MESSAGES[DEFAULT_LANG]
         text = template.format(minutes=minutes)
-        # Cache o'chirilsin — har safar yangi (minutes o'zgaradi)
-        cache_path = self._get_cache_path(text, lang)
-        if cache_path.exists():
-            cache_path.unlink()
-        return await self._synthesize_with_cache(text, lang)
+
+        # Barqaror nom — Asterisk bu faylni audio_path sifatida topadi
+        asterisk_dir = self._get_asterisk_dir()
+        stable_path = asterisk_dir / f"api_alert_{lang}.wav"
+
+        # Har safar qayta yarat (minutes farqli)
+        if stable_path.exists():
+            stable_path.unlink(missing_ok=True)
+
+        mp3_tmp = stable_path.with_suffix(".mp3")
+        provider = self._get_provider(lang)
+        if not await provider._generate_mp3(text, mp3_tmp):
+            logger.error(f"TTS api_down mp3 yaratilmadi: lang={lang}")
+            return None
+        if not await provider._convert_to_wav(mp3_tmp, stable_path):
+            logger.error(f"TTS api_down wav yaratilmadi: lang={lang}")
+            return None
+        mp3_tmp.unlink(missing_ok=True)
+
+        if not stable_path.exists() or stable_path.stat().st_size == 0:
+            logger.error(f"TTS api_down fayl bo'sh: {stable_path}")
+            return None
+
+        logger.info(f"api_alert audio tayyor: {stable_path} ({stable_path.stat().st_size} bayt)")
+        return stable_path
+
+    def _get_asterisk_dir(self) -> Path:
+        """Asterisk o'qiy oladigan katalog."""
+        default = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
+        d = Path(os.getenv("ASTERISK_PLAYBACK_PATH", os.getenv("ASTERISK_SOUNDS_PATH", default)))
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def get_api_alert_asterisk_path(self, lang: str = DEFAULT_LANG) -> str:
+        """Asterisk Playback uchun api_alert yo'li (extension'siz)."""
+        lang = _normalize_lang(lang)
+        d = self._get_asterisk_dir()
+        return str(d / f"api_alert_{lang}")
 
     async def generate_admin_daily_report(self, biz_count: int, product_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Admin: kunlik hisobot"""

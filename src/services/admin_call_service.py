@@ -150,6 +150,7 @@ class AdminCallService:
 
     async def start(self):
         self._running = True
+        await self._prepare_alert_audio()   # startup da audio tayyor bo'lsin
         await self._start_tasks()
 
     async def _start_tasks(self):
@@ -456,42 +457,66 @@ class AdminCallService:
             return 0
         return max(1, int((datetime.now() - self._api_down_since).total_seconds() / 60))
 
+    async def _prepare_alert_audio(self):
+        """Startup da api_alert audio faylini Asterisk pathga tayyorlash.
+        Har restart da qayta yaratiladi — til sozlamasi o'zgargan bo'lishi mumkin.
+        """
+        lang = self.config.get("api_health_language", "uz")
+        try:
+            # 1 daqiqa xabar bilan "prewarm" qilish
+            path = await self.tts.generate_api_down_message(1, lang=lang)
+            if path and path.exists():
+                logger.info(f"api_alert audio tayyor: {path}")
+            else:
+                logger.error("api_alert audio yaratilmadi — qo'ng'iroq audio'siz bo'lishi mumkin!")
+        except Exception as e:
+            logger.error(f"api_alert audio tayyorlashda xato: {e}")
+
     async def _call_api_down(self):
         """Adminga API o'chiq degan qo'ng'iroq.
 
-        Agar AUTODIALER_NOTIFY_URL sozlangan bo'lsa — Asterisk serveridagi
-        webhook listener'ga POST yuboriladi (u o'zi qo'ng'iroq qiladi).
-        Aks holda — to'g'ridan-to'g'ri AMI orqali qo'ng'iroq.
+        QOIDA: avval audio tayyorlanadi, keyin qo'ng'iroq.
+        Audio yaratilmasa — qo'ng'iroq qilinmaydi.
         """
         phones = self._get_enabled_phones()
         if not phones:
             logger.warning("API down: admin raqamlar yo'q, qo'ng'iroq qilinmadi")
             return
 
-        self._api_last_called_at = datetime.now()
         minutes = self._down_minutes()
+        lang = self.config.get("api_health_language", "uz")
 
+        # 1. AUDIO TAYYORLASH — bu bajarilmasa qo'ng'iroq yo'q
+        audio = await self.tts.generate_api_down_message(minutes, lang=lang)
+        if not audio or not audio.exists() or audio.stat().st_size == 0:
+            logger.error(
+                f"API down [{minutes} daqiqa]: audio tayyorlanmadi — "
+                f"qo'ng'iroq BEKOR QILINDI. {phones}"
+            )
+            return
+
+        asterisk_path = self.tts.get_api_alert_asterisk_path(lang)
+        logger.info(f"Audio tayyor: {audio} → Asterisk: {asterisk_path}")
+
+        self._api_last_called_at = datetime.now()
+
+        # 2. QO'NG'IROQ
         notify_url = os.getenv("AUTODIALER_NOTIFY_URL", "").strip()
         if notify_url:
-            await self._notify_asterisk_server(notify_url, phones, minutes)
+            await self._notify_asterisk_server(notify_url, phones, minutes, asterisk_path)
         else:
-            # To'g'ridan-to'g'ri AMI orqali
-            lang = self.config.get("api_health_language", "uz")
-            audio = await self.tts.generate_api_down_message(minutes, lang=lang)
-            if not audio:
-                logger.error("API down: TTS audio yaratilmadi")
-                return
-            self.ensure_for_asterisk_if_available(audio)
             logger.info(f"Admin API-down qo'ng'iroq (AMI): {minutes} daqiqa, {len(phones)} ta raqam")
-            await self._call_admins(str(audio), "api_down")
+            await self._call_admins(asterisk_path, "api_down")
 
-    async def _notify_asterisk_server(self, url: str, phones: list, minutes: int):
+    async def _notify_asterisk_server(self, url: str, phones: list, minutes: int,
+                                       audio_path: str = ""):
         """Asterisk serveridagi webhook listener'ga event yuborish."""
         secret = os.getenv("WEBHOOK_SECRET", os.getenv("NONBOR_SECRET", ""))
         payload = {
             "event": "api_down",
             "admin_phones": phones,
             "down_minutes": minutes,
+            "audio_path": audio_path,   # listener shu pathni Playback uchun ishlatadi
         }
         try:
             timeout = aiohttp.ClientTimeout(total=10)

@@ -53,18 +53,40 @@ def _sanitize_phone(raw: str) -> str:
     return ""  # noto'g'ri format — ishlatilmaydi
 
 
-def _originate(phone: str) -> bool:
-    """Asterisk CLI orqali qo'ng'iroq boshlash."""
+def _check_audio(path: str) -> bool:
+    """Audio fayl mavjud va bo'sh emasligini tekshirish.
+    Asterisk extension'siz path ishlatadi → .wav qo'shib tekshirish.
+    """
+    wav = path if path.endswith(".wav") else path + ".wav"
+    import os as _os
+    if not _os.path.exists(wav):
+        logger.error(f"Audio fayl topilmadi: {wav} — qo'ng'iroq BEKOR")
+        return False
+    if _os.path.getsize(wav) == 0:
+        logger.error(f"Audio fayl bo'sh (0 bayt): {wav} — qo'ng'iroq BEKOR")
+        return False
+    logger.info(f"Audio tekshirildi: {wav} ({_os.path.getsize(wav)} bayt)")
+    return True
+
+
+def _originate(phone: str, audio_path: str) -> bool:
+    """Asterisk CLI orqali qo'ng'iroq boshlash.
+    audio_path mavjud bo'lmasa qo'ng'iroq qilinmaydi.
+    """
     clean = _sanitize_phone(phone)
     if not clean:
-        logger.warning(f"Noto'g'ri telefon raqami: {phone!r}")
+        logger.warning(f"Noto'g'ri telefon raqami: {phone!r} — o'tkazib yuborildi")
+        return False
+
+    # Audio tekshirish — yo'q bo'lsa qo'ng'iroq YO'Q
+    if not _check_audio(audio_path):
         return False
 
     # Asterisk CLI buyrug'i — to'liq sanitized argument
     cmd_inner = (
         f"channel originate "
         f"PJSIP/{clean}@{SIP_ENDPOINT} "
-        f"application Playback {ALERT_AUDIO}"
+        f"application Playback {audio_path}"
     )
     try:
         result = subprocess.run(
@@ -74,7 +96,7 @@ def _originate(phone: str) -> bool:
             timeout=15,
         )
         if result.returncode == 0:
-            logger.info(f"Qo'ng'iroq boshlandi: {clean}")
+            logger.info(f"Qo'ng'iroq boshlandi: {clean} | audio: {audio_path}")
             return True
         logger.error(f"Asterisk xatosi [{clean}]: {result.stderr.strip()}")
         return False
@@ -112,7 +134,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         # ── Eventlarni qayta ishlash ──────────────────────────────────────────
         if event == "api_down":
-            # Bot: admin_phone (string) yoki admin_phones (array) yuborishi mumkin
+            # Bot: admin_phone (string) yoki admin_phones (array)
             raw = body.get("admin_phones") or body.get("admin_phone", "")
             if isinstance(raw, list):
                 phones: List[str] = raw
@@ -121,12 +143,28 @@ class WebhookHandler(BaseHTTPRequestHandler):
             else:
                 phones = []
 
-            reason   = body.get("reason", "")
-            logger.warning(f"API down — {reason} | {len(phones)} ta adminga qo'ng'iroq")
+            # Audio path: autodialer yuborsa ishlatiladi, aks holda ALERT_AUDIO
+            audio_path = body.get("audio_path", "").strip() or ALERT_AUDIO
+            reason = body.get("reason", "")
+
+            logger.warning(
+                f"API down — {reason} | "
+                f"audio: {audio_path} | "
+                f"{len(phones)} ta adminga qo'ng'iroq"
+            )
+
+            # Audio mavjudligini tekshir — yo'q bo'lsa hech kim chaqirilmaydi
+            if not _check_audio(audio_path):
+                self._respond(503, {
+                    "status": "error",
+                    "reason": f"audio topilmadi: {audio_path}.wav",
+                    "called": 0,
+                })
+                return
 
             called = 0
             for phone in phones:
-                if _originate(phone):
+                if _originate(phone, audio_path):
                     called += 1
 
             self._respond(200, {"status": "ok", "called": called, "total": len(phones)})
