@@ -44,9 +44,10 @@ class AutodialerAPI:
     sozlamalar va statistikani boshqaradi
     """
 
-    def __init__(self, autodialer=None, port: int = 8585):
+    def __init__(self, autodialer=None, port: int = 8585, webhook_service=None):
         self.autodialer = autodialer
         self.port = port
+        self.webhook_service = webhook_service
         self.api_key = os.getenv("API_SECRET_KEY", "")
         _cors_origins = [
             o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost,http://localhost:80").split(",")
@@ -123,6 +124,8 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/chat-info", self.get_chat_info)
         # Health
         r.add_get("/api/autodialer/health", self.health)
+        # Recordings
+        r.add_get("/api/autodialer/recordings/{filename}", self.get_recording)
         # AI trigger — biznes ID bo'yicha qo'ng'iroq
         r.add_post("/api/autodialer/call-business", self.call_business)
         # Admin call management
@@ -132,6 +135,12 @@ class AutodialerAPI:
         r.add_post("/api/autodialer/admin-call/phones", self.add_admin_phone)
         r.add_delete("/api/autodialer/admin-call/phones/{phone}", self.remove_admin_phone)
         r.add_post("/api/autodialer/admin-call/test", self.test_admin_call)
+        # Webhooks
+        r.add_get("/api/autodialer/webhooks", self.list_webhooks)
+        r.add_post("/api/autodialer/webhooks", self.add_webhook)
+        r.add_delete("/api/autodialer/webhooks/{wid}", self.remove_webhook)
+        r.add_post("/api/autodialer/webhooks/{wid}/toggle", self.toggle_webhook)
+        r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
         # OPTIONS preflight uchun
         r.add_route("OPTIONS", "/{path:.*}", self._options_handler)
 
@@ -202,6 +211,9 @@ class AutodialerAPI:
             "calls_1_attempt": s.calls_1_attempt,
             "calls_2_attempts": s.calls_2_attempts,
             "calls_3_attempts": s.calls_3_attempts,
+            "unanswered_1_attempt": getattr(s, "unanswered_1_attempt", 0),
+            "unanswered_2_attempts": getattr(s, "unanswered_2_attempts", 0),
+            "unanswered_3_attempts": getattr(s, "unanswered_3_attempts", 0),
             "accepted_without_telegram": s.accepted_without_telegram,
         })
 
@@ -283,6 +295,9 @@ class AutodialerAPI:
             "calls_1_attempt": s.calls_1_attempt,
             "calls_2_attempts": s.calls_2_attempts,
             "calls_3_attempts": s.calls_3_attempts,
+            "unanswered_1_attempt": getattr(s, "unanswered_1_attempt", 0),
+            "unanswered_2_attempts": getattr(s, "unanswered_2_attempts", 0),
+            "unanswered_3_attempts": getattr(s, "unanswered_3_attempts", 0),
         }
 
         # Sahifalash
@@ -1000,10 +1015,134 @@ class AutodialerAPI:
             lang = body.get("lang")
         except Exception:
             lang = None
-        result = await self._admin_svc.test_call(lang=lang)
-        if result.get("success"):
+
+        phones = self._admin_svc._get_enabled_phones()
+        if not phones:
+            return self._err("Admin raqamlar yo'q")
+
+        # Fire-and-forget: darhol javob qaytarish, qo'ng'iroq backgroundda
+        import asyncio
+        asyncio.create_task(self._admin_svc.test_call(lang=lang))
+
+        return self._ok({
+            "success": True,
+            "message": "Qo'ng'iroq boshlandi",
+            "phones": phones,
+        })
+
+    # ===== WEBHOOKS =====
+
+    @property
+    def _wh(self):
+        return self.webhook_service
+
+    async def list_webhooks(self, request):
+        """Barcha webhook'larni ko'rsatish"""
+        if not self._wh:
+            return self._err("Webhook servis mavjud emas", status=503)
+        return self._ok(self._wh.list_webhooks())
+
+    async def add_webhook(self, request):
+        """Yangi webhook qo'shish
+
+        Body: {"url": "https://...", "events": ["call.completed"], "secret": "opt"}
+        """
+        if not self._wh:
+            return self._err("Webhook servis mavjud emas", status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._err("JSON parse xatosi")
+
+        url = str(body.get("url", "")).strip()
+        events = body.get("events", [])
+        secret = str(body.get("secret", "")).strip()
+
+        if not url:
+            return self._err("url maydoni kerak")
+        if not events or not isinstance(events, list):
+            return self._err("events ro'yxati kerak (call.completed, order.updated)")
+
+        try:
+            entry = self._wh.add_webhook(url, events, secret)
+        except ValueError as e:
+            return self._err(str(e))
+
+        return self._ok(entry)
+
+    async def remove_webhook(self, request):
+        """Webhook o'chirish"""
+        if not self._wh:
+            return self._err("Webhook servis mavjud emas", status=503)
+        wid = request.match_info["wid"]
+        if self._wh.remove_webhook(wid):
+            return self._ok({"id": wid, "deleted": True})
+        return self._err("Webhook topilmadi", status=404)
+
+    async def toggle_webhook(self, request):
+        """Webhook yoqish/o'chirish"""
+        if not self._wh:
+            return self._err("Webhook servis mavjud emas", status=503)
+        wid = request.match_info["wid"]
+        result = self._wh.toggle_webhook(wid)
+        if result:
             return self._ok(result)
-        return self._err(result.get("error", "Xato"))
+        return self._err("Webhook topilmadi", status=404)
+
+    async def test_webhook(self, request):
+        """Webhook test qilish — sinov event yuborish"""
+        if not self._wh:
+            return self._err("Webhook servis mavjud emas", status=503)
+        wid = request.match_info["wid"]
+
+        targets = [w for w in self._wh._webhooks if w["id"] == wid]
+        if not targets:
+            return self._err("Webhook topilmadi", status=404)
+
+        import json as _json
+        from datetime import datetime as _dt
+        payload = _json.dumps({
+            "event": "webhook.test",
+            "timestamp": _dt.now().isoformat(),
+            "data": {"message": "Bu test xabari", "webhook_id": wid},
+        }, ensure_ascii=False)
+
+        async def _fire():
+            import aiohttp as _aio
+            async with _aio.ClientSession() as sess:
+                await self._wh._send(sess, targets[0], "webhook.test", payload)
+
+        asyncio.create_task(_fire())
+        return self._ok({"message": "Test event yuborildi", "webhook_id": wid})
+
+    # ===== RECORDINGS =====
+
+    async def get_recording(self, request):
+        """Qo'ng'iroq yozuvini yuborish
+
+        GET /api/autodialer/recordings/{filename}
+        filename: 20240509_135600_998901234567.wav
+        """
+        filename = request.match_info["filename"]
+
+        # Faqat .wav fayllar, path traversal oldini olish
+        import re as _re
+        if not _re.match(r'^[\w\-]+\.wav$', filename):
+            return self._err("Noto'g'ri fayl nomi", status=400)
+
+        record_dir = os.getenv("CALL_RECORD_DIR", "/var/spool/asterisk/recording")
+        filepath = Path(record_dir) / filename
+
+        if not filepath.exists():
+            return self._err("Fayl topilmadi", status=404)
+
+        return web.FileResponse(
+            filepath,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "audio/wav",
+            }
+        )
 
     # ===== HEALTH =====
 

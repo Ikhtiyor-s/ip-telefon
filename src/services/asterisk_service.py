@@ -6,8 +6,9 @@ Qo'ng'iroqlarni boshqarish va kuzatish
 import logging
 import asyncio
 import re
+from datetime import datetime
 from typing import Optional, Callable, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -31,10 +32,15 @@ class CallStatus(Enum):
 class CallResult:
     """Qo'ng'iroq natijasi"""
     status: CallStatus
-    duration: int = 0
+    duration: int = 0          # jami vaqt (ring + gaplashish), soniyada
     dial_status: str = ""
     channel: str = ""
     error: str = ""
+    started_at: str = ""       # qo'ng'iroq boshlangan vaqt (ISO)
+    answered_at: str = ""      # javob berilgan vaqt (ISO)
+    wait_seconds: int = 0      # ring vaqti (started → answered)
+    duration_seconds: int = 0  # gaplashish vaqti (answered → hangup)
+    recording_file: str = ""   # yozuv fayl nomi (extension'siz)
 
     @property
     def is_answered(self) -> bool:
@@ -382,7 +388,10 @@ class AsteriskAMI:
         phone_number: str,
         audio_file: str,
         context: str = "autodialer-dynamic",
-        variables: Dict[str, str] = None
+        variables: Dict[str, str] = None,
+        recording_name: str = "",
+        audio_uz: str = "",
+        audio_ru: str = "",
     ) -> CallResult:
         """
         Qo'ng'iroq boshlash
@@ -406,34 +415,73 @@ class AsteriskAMI:
             logger.error(f"Telefon validatsiya xatosi: {e}")
             return CallResult(status=CallStatus.FAILED, error=str(e))
 
-        # Audio faylni Asterisk sounds pathga convert qilish
+        # Audio faylni Asterisk o'qiydigan pathga aylantirish
+        # audio_file, audio_uz, audio_ru — autodialer cache'dagi haqiqiy fayllar
+        # Bu yerda faqat path'ni stem'ga aylantirish kerak (ensure_for_asterisk allaqachon ko'chirgan)
         import os
-        # ASTERISK_PLAYBACK_PATH: Asterisk konteyner ichidagi audio yo'l
-        # ASTERISK_SOUNDS_PATH: Autodialer konteyner ichidagi audio yo'l (fayllar yoziladigan)
         default_playback = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
-        playback_path = os.getenv("ASTERISK_PLAYBACK_PATH", os.getenv("ASTERISK_SOUNDS_PATH", default_playback))
-        audio_filename = Path(str(audio_file)).stem  # extension siz fayl nomi
-        wsl_audio_path = f"{playback_path}/{audio_filename}"
+        playback_path = os.getenv(
+            "ASTERISK_PLAYBACK_PATH",
+            os.getenv("ASTERISK_SOUNDS_PATH", default_playback)
+        )
 
-        # Audio fayl mavjudligini tekshirish (autodialer konteyner ichida)
-        audio_file_path = Path(str(audio_file))
-        if audio_file_path.exists():
-            file_size = audio_file_path.stat().st_size
-            if file_size == 0:
-                logger.error(f"Audio fayl bo'sh (0 bayt): {audio_file}")
-                return CallResult(status=CallStatus.FAILED, error="Audio file is empty")
-            logger.info(f"Audio fayl tekshirildi: {audio_file} ({file_size} bayt)")
-        else:
-            logger.error(f"Audio fayl topilmadi: {audio_file}")
-            return CallResult(status=CallStatus.FAILED, error=f"Audio file not found: {audio_file}")
+        def _asterisk_path(src: str) -> str:
+            """Fayl yo'lini Asterisk playback path'ga o'zgartirish (extension'siz)"""
+            if not src:
+                return ""
+            return f"{playback_path}/{Path(str(src)).stem}"
 
-        # Channel variable
+        def _check_file(src: str, label: str) -> bool:
+            """Faylni tekshirish — mavjud va bo'sh emasmi"""
+            if not src:
+                return False
+            p = Path(str(src))
+            if not p.exists():
+                logger.error(f"[{label}] Audio fayl topilmadi: {p}")
+                return False
+            if p.stat().st_size == 0:
+                logger.error(f"[{label}] Audio fayl bo'sh (0 bayt): {p}")
+                return False
+            return True
+
+        # Asosiy (combined) faylni tekshirish
+        combined_ok = _check_file(audio_file, "COMBINED")
+        uz_ok = _check_file(audio_uz, "UZ")
+        ru_ok = _check_file(audio_ru, "RU")
+
+        if not uz_ok and not combined_ok:
+            logger.error(
+                f"Hech qanday audio fayl mavjud emas — qo'ng'iroq bekor qilindi. "
+                f"UZ={audio_uz} | COMBINED={audio_file}"
+            )
+            return CallResult(status=CallStatus.FAILED, error="No audio file available")
+
+        wsl_audio_path = _asterisk_path(audio_file)
+        wsl_uz = _asterisk_path(audio_uz) if uz_ok else ""
+        wsl_ru = _asterisk_path(audio_ru) if ru_ok else ""
+
+        logger.info(
+            f"Asterisk audio yo'llari: "
+            f"UZ={wsl_uz or 'YOQ'} | RU={wsl_ru or 'YOQ'} | COMBINED={wsl_audio_path}"
+        )
+
         channel_vars = f"AUDIO_FILE={wsl_audio_path}"
+        if wsl_uz:
+            channel_vars += f",AUDIO_UZ={wsl_uz}"
+        if wsl_ru:
+            channel_vars += f",AUDIO_RU={wsl_ru}"
+        if recording_name:
+            channel_vars += f",RECORDING_NAME={recording_name}"
         if variables:
             for k, v in variables.items():
                 channel_vars += f",{k}={v}"
 
-        logger.info(f"Qo'ng'iroq boshlanmoqda: {clean_number}, Audio: {wsl_audio_path}, Fayl: {audio_file}")
+        logger.info(
+            f"Qo'ng'iroq boshlanmoqda: {clean_number} | "
+            f"UZ: {Path(wsl_uz).name if wsl_uz else '-'} | "
+            f"RU: {Path(wsl_ru).name if wsl_ru else '-'} | "
+            f"Yozuv: {recording_name or '-'}"
+        )
 
         response = await self._send_action(
             "Originate",
@@ -447,13 +495,18 @@ class AsteriskAMI:
             Async="true"
         )
 
+        started_at = datetime.now().isoformat()
         if response and response.get("Response") == "Success":
             logger.info(f"Qo'ng'iroq yuborildi: {clean_number}")
-            return CallResult(status=CallStatus.ORIGINATING)
+            return CallResult(
+                status=CallStatus.ORIGINATING,
+                started_at=started_at,
+                recording_file=recording_name,
+            )
         else:
             error = response.get("Message", "Unknown error") if response else "No response"
             logger.error(f"Qo'ng'iroq xatosi: {error}")
-            return CallResult(status=CallStatus.FAILED, error=error)
+            return CallResult(status=CallStatus.FAILED, error=error, started_at=started_at)
 
     async def check_registration(self) -> bool:
         """SIP registratsiya holatini tekshirish"""
@@ -504,6 +557,7 @@ class CallManager:
         self.ami.on_event("OriginateResponse", self._on_originate_response)
         self.ami.on_event("Hangup", self._on_hangup)
         self.ami.on_event("DialEnd", self._on_dial_end)
+        self.ami.on_event("ChannelStateChange", self._on_channel_state_change)
 
     async def _on_originate_response(self, data: dict):
         """Originate natijasi - qo'ng'iroq yakunlandi"""
@@ -548,9 +602,32 @@ class CallManager:
             if self._call_in_progress:
                 self._call_completed_event.set()
 
+    async def _on_channel_state_change(self, data: dict):
+        """Kanal holati o'zgarganda — javob berilgan vaqtni qayd etish"""
+        if data.get("ChannelState") != "6":  # 6 = Up (answered)
+            return
+        channel = data.get("Channel", "")
+        match = re.search(r'PJSIP/(\d+)', channel)
+        if not match:
+            return
+        phone_match = match.group(1)
+        if phone_match in self._active_calls:
+            call_data = self._active_calls[phone_match]
+            if not call_data.get("answered_at"):
+                call_data["answered_at"] = datetime.now()
+                logger.info(f"Qo'ng'iroq javob berildi: {phone_match}")
+
     async def _on_hangup(self, data: dict):
-        """Hangup eventi - e'tiborsiz (DialEnd yetarli)"""
-        pass
+        """Hangup eventi — gaplashish davomiyligini hisoblash"""
+        channel = data.get("Channel", "")
+        match = re.search(r'PJSIP/(\d+)', channel)
+        if not match:
+            return
+        phone_match = match.group(1)
+        if phone_match in self._active_calls:
+            call_data = self._active_calls[phone_match]
+            call_data["hangup_at"] = datetime.now()
+            logger.debug(f"Hangup qayd etildi: {phone_match}")
 
     async def _on_dial_end(self, data: dict):
         """Dial tugadi - parallel qo'ng'iroqlarni qo'llab-quvvatlaydi"""
@@ -611,6 +688,9 @@ class CallManager:
         before_retry_check: Callable = None,
         max_attempts_override: int = None,
         retry_interval_override: int = None,
+        recording_name: str = "",
+        audio_uz: str = "",
+        audio_ru: str = "",
     ) -> CallResult:
         """
         Qo'ng'iroq qilish (retry bilan)
@@ -643,7 +723,12 @@ class CallManager:
                 f"Qo'ng'iroq urinishi {self._current_attempt}/{effective_max}: {phone_number}"
             )
 
-            result = await self._make_single_call(phone_number, current_audio)
+            result = await self._make_single_call(
+                phone_number, current_audio,
+                recording_name=recording_name,
+                audio_uz=audio_uz,
+                audio_ru=audio_ru,
+            )
 
             if result.is_answered:
                 logger.info(f"Qo'ng'iroq muvaffaqiyatli: {phone_number}")
@@ -680,7 +765,10 @@ class CallManager:
         self,
         phone_number: str,
         audio_file: str,
-        parallel: bool = True
+        parallel: bool = True,
+        recording_name: str = "",
+        audio_uz: str = "",
+        audio_ru: str = "",
     ) -> CallResult:
         """Bitta qo'ng'iroq qilish - parallel qo'llab-quvvatlanadi"""
 
@@ -694,10 +782,14 @@ class CallManager:
         if parallel:
             # PARALLEL rejim - har bir qo'ng'iroq mustaqil
             call_event = asyncio.Event()
+            call_started = datetime.now()
             self._active_calls[clean_number] = {
                 "event": call_event,
                 "result": None,
-                "phone": phone_number
+                "phone": phone_number,
+                "started_at": call_started,
+                "answered_at": None,
+                "hangup_at": None,
             }
 
             # AMI ulanish tekshirish
@@ -710,7 +802,12 @@ class CallManager:
                     return CallResult(status=CallStatus.FAILED, error="AMI reconnect failed")
 
             # Qo'ng'iroq boshlash
-            result = await self.ami.originate_call(phone_number, audio_file)
+            result = await self.ami.originate_call(
+                phone_number, audio_file,
+                recording_name=recording_name,
+                audio_uz=audio_uz,
+                audio_ru=audio_ru,
+            )
 
             if result.status == CallStatus.FAILED:
                 del self._active_calls[clean_number]
@@ -726,12 +823,27 @@ class CallManager:
                     error="Timeout"
                 )
 
-            # Natijani olish va tozalash
-            call_result = self._active_calls.get(clean_number, {}).get("result")
-            if clean_number in self._active_calls:
-                del self._active_calls[clean_number]
+            # Natijani olish va tozalash + timing hisoblash
+            call_data = self._active_calls.pop(clean_number, {})
+            call_result: CallResult = call_data.get("result") or CallResult(
+                status=CallStatus.FAILED, error="No result"
+            )
 
-            return call_result or CallResult(status=CallStatus.FAILED, error="No result")
+            # Timing
+            call_result.started_at = call_started.isoformat()
+            call_result.recording_file = recording_name
+            answered_at: Optional[datetime] = call_data.get("answered_at")
+            hangup_at: Optional[datetime] = call_data.get("hangup_at") or datetime.now()
+            if answered_at:
+                call_result.answered_at = answered_at.isoformat()
+                call_result.wait_seconds = max(0, int((answered_at - call_started).total_seconds()))
+                call_result.duration_seconds = max(0, int((hangup_at - answered_at).total_seconds()))
+            else:
+                # Javob berilmagan — jami vaqt ring vaqti sifatida
+                call_result.wait_seconds = max(0, int((hangup_at - call_started).total_seconds()))
+                call_result.duration_seconds = 0
+
+            return call_result
 
         else:
             # KETMA-KET rejim (eski usul)

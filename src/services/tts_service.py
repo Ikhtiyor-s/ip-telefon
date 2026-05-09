@@ -298,7 +298,7 @@ class TTSService:
         return await self._synthesize_with_cache(_order_message_text(count, lang), lang)
 
     async def generate_bilingual_order_message(self, count: int) -> Optional[Path]:
-        """Ikki tilli buyurtma xabari: o'zbek + rus (birlashtirilgan audio)"""
+        """Ikki tilli buyurtma xabari: o'zbek + rus (birlashtirilgan audio, fallback uchun)"""
         cache_key = f"bilingual_uz_ru_{count}"
         text_hash = hashlib.md5(cache_key.encode()).hexdigest()
         combined_path = self.cache_dir / f"{text_hash}.wav"
@@ -320,6 +320,63 @@ class TTSService:
 
         logger.info(f"Ikki tilli audio yaratildi: {combined_path} ({combined_path.stat().st_size} bayt)")
         return combined_path
+
+    def ensure_for_asterisk(self, wav_path: Optional[Path]) -> str:
+        """
+        Audio faylni Asterisk o'qiy oladigan yo'lga ko'chirish.
+
+        Returns:
+            Asterisk ga uzatiladigan path (extension'siz), yoki bo'sh satr.
+
+        Asterisk ASTERISK_PLAYBACK_PATH ichidan o'qiydi.
+        Agar bu path autodialer cache dir'idan farq qilsa, fayl nusxa olinadi.
+        """
+        if not wav_path or not wav_path.exists() or wav_path.stat().st_size == 0:
+            logger.warning(f"ensure_for_asterisk: fayl mavjud emas: {wav_path}")
+            return ""
+
+        default_pb = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
+        asterisk_dir = Path(
+            os.getenv("ASTERISK_PLAYBACK_PATH",
+                      os.getenv("ASTERISK_SOUNDS_PATH", default_pb))
+        )
+
+        # Agar fayl allaqachon to'g'ri katalogda bo'lsa — shunchaki yo'l qaytaramiz
+        if wav_path.parent.resolve() == asterisk_dir.resolve():
+            return str(asterisk_dir / wav_path.stem)
+
+        # Boshqa katalogda — nusxa olishga harakat
+        try:
+            asterisk_dir.mkdir(parents=True, exist_ok=True)
+            dest = asterisk_dir / wav_path.name
+            if not dest.exists() or dest.stat().st_size != wav_path.stat().st_size:
+                import shutil
+                shutil.copy2(str(wav_path), str(dest))
+                logger.info(f"Audio Asterisk ga ko'chirildi: {wav_path.name} → {asterisk_dir}")
+            return str(asterisk_dir / wav_path.stem)
+        except Exception as e:
+            logger.error(f"Audio Asterisk ga ko'chirishda xato: {e} | fayl: {wav_path}")
+            # Ko'chira olmadik — original path qaytaramiz (shared volume bo'lsa ishlaydi)
+            return str(wav_path.parent / wav_path.stem)
+
+    async def get_bilingual_paths(self, count: int) -> tuple:
+        """
+        Ikki tilli audio yo'llarini qaytarish va Asterisk'ga sinxronlash.
+
+        Returns: (uz_path, ru_path, combined_path)
+          Har bir Path — TTS cache da saqlangan haqiqiy fayl.
+          ensure_for_asterisk() orqali Asterisk o'qiydigan joyga ko'chirilgan.
+        """
+        uz_path = await self.generate_order_message(count, lang="uz")
+        ru_path = await self.generate_order_message(count, lang="ru")
+        combined_path = await self.generate_bilingual_order_message(count)
+
+        # Asterisk o'qiydigan joyga ko'chirish (zarur bo'lsa)
+        self.ensure_for_asterisk(uz_path)
+        self.ensure_for_asterisk(ru_path)
+        self.ensure_for_asterisk(combined_path)
+
+        return uz_path, ru_path, combined_path
 
     async def generate_planned_message(self, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Reja eslatma xabarini tilga qarab olish/yaratish"""
@@ -383,14 +440,21 @@ class TTSService:
             else:
                 logger.error(f"Ikki tilli audio yaratilmadi: count={i}")
 
-        # Natija hisoboti
+        # Barcha cache fayllarni Asterisk'ga sinxronlash
         import glob
         wav_files = glob.glob(str(self.cache_dir / "*.wav"))
+        synced = 0
+        for wf in wav_files:
+            p = Path(wf)
+            result_path = self.ensure_for_asterisk(p)
+            if result_path:
+                synced += 1
+
         total_size = sum(os.path.getsize(f) for f in wav_files)
         logger.info(
             f"TTS oldindan yaratish tugadi: "
             f"{created}/{total} ta audio yaratildi, "
-            f"cache da {len(wav_files)} ta WAV fayl, "
+            f"cache da {len(wav_files)} ta WAV fayl ({synced} ta Asterisk'ga sinxronlandi), "
             f"jami hajm: {total_size / 1024 / 1024:.1f} MB"
         )
 

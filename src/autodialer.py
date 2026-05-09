@@ -19,6 +19,7 @@ Jarayon:
 import asyncio
 import json
 import logging
+import re
 import signal
 import sys
 import os
@@ -50,7 +51,8 @@ from services import (
     TelegramChatError,
     StatsService,
     StatsCallResult,
-    OrderResult
+    OrderResult,
+    WebhookService,
 )
 from api_server import AutodialerAPI
 
@@ -317,7 +319,8 @@ class AutodialerPro:
         self._planned_reminders_file = project_root / "data" / "planned_reminders.json"
         self._load_planned_reminders()
 
-        self.stats = StatsService(data_dir=data_dir)
+        self.webhook_service = WebhookService(data_dir=data_dir)
+        self.stats = StatsService(data_dir=data_dir, webhook_service=self.webhook_service)
 
         if telegram_token:
             self.telegram = TelegramService(
@@ -343,7 +346,7 @@ class AutodialerPro:
 
         # HTTP API server (admin panel uchun)
         api_port = getenv_int("API_PORT", 8585)
-        self.api_server = AutodialerAPI(autodialer=self, port=api_port)
+        self.api_server = AutodialerAPI(autodialer=self, port=api_port, webhook_service=self.webhook_service)
 
         logger.info("AutodialerPro yaratildi")
 
@@ -1799,12 +1802,16 @@ class AutodialerPro:
 
             logger.info(f"Qo'ng'iroq: {seller_name} ({seller_phone}), {order_count} ta buyurtma, til: {seller_lang}")
 
-            # TTS audio olish (o'zbek + rus, ikki tilli)
-            audio_path = await self.tts.generate_bilingual_order_message(order_count)
-            if not audio_path:
+            # TTS audio olish: uz, ru va birlashgan (fallback)
+            uz_path, ru_path, audio_path = await self.tts.get_bilingual_paths(order_count)
+            if not uz_path and not audio_path:
                 logger.error(f"TTS audio yaratilmadi: {seller_phone}")
                 return None
-            logger.info(f"TTS audio tayyor: {audio_path} ({audio_path.stat().st_size} bayt), til: uz+ru")
+            _sz = lambda p: f"{p.stat().st_size} bayt" if p and p.exists() else "topilmadi"
+            logger.info(
+                f"TTS audio: uz={_sz(uz_path)} | ru={_sz(ru_path)} | "
+                f"birlashgan={_sz(audio_path)}"
+            )
 
             # Buyurtma IDlari
             order_ids = [o.get("lead_id") for o in seller_data["orders"]]
@@ -1854,24 +1861,49 @@ class AutodialerPro:
                 logger.info(f"{still_checking}/{len(order_ids)} ta buyurtma hali CHECKING da — qayta qo'ng'iroq qilinadi")
 
                 # Yangi TTS audio yaratish (yangilangan son bilan, ikki tilli)
-                new_audio_path = await self.tts.generate_bilingual_order_message(new_count)
-                logger.info(f"Yangi audio yaratildi: {new_count} ta buyurtma (til: uz+ru)")
+                new_uz, new_ru, new_combined = await self.tts.get_bilingual_paths(new_count)
+                logger.info(f"Yangi audio yaratildi: {new_count} ta buyurtma (uz+ru)")
+                return (True, str(new_combined or new_uz) if (new_combined or new_uz) else None)
 
-                return (True, str(new_audio_path) if new_audio_path else None)
+            # Yozuv fayl nomini hisoblash (Asterisk ga uzatiladi)
+            clean_phone = re.sub(r'[^\d]', '', seller_phone)
+            recording_name = datetime.now().strftime(f"%Y%m%d_%H%M%S_{clean_phone}")
+            api_base = os.getenv("API_BASE_URL", "").rstrip("/")
+            recording_url = (
+                f"{api_base}/api/autodialer/recordings/{recording_name}.wav"
+                if api_base else ""
+            )
 
             # Qo'ng'iroq qilish (per-business config bilan)
             result = await self.call_manager.make_call_with_retry(
                 phone_number=seller_phone,
-                audio_file=str(audio_path),
+                audio_file=str(audio_path or uz_path),
+                audio_uz=str(uz_path) if uz_path else "",
+                audio_ru=str(ru_path) if ru_path else "",
                 on_attempt=self._on_call_attempt,
                 before_retry_check=check_orders_still_pending,
                 max_attempts_override=biz_max_attempts,
                 retry_interval_override=biz_retry_interval,
+                recording_name=recording_name,
             )
 
             # Statistika
             self._seller_call_attempts[seller_phone] = self.state.call_attempts
             self._seller_call_answered[seller_phone] = result.is_answered
+
+            _common_call_kwargs = dict(
+                phone=seller_phone,
+                seller_name=seller_name,
+                order_count=order_count,
+                attempts=self.state.call_attempts,
+                order_ids=order_ids,
+                started_at=result.started_at,
+                answered_at=result.answered_at,
+                wait_seconds=result.wait_seconds,
+                duration_seconds=result.duration_seconds,
+                recording_file=result.recording_file,
+                recording_url=recording_url if result.is_answered else "",
+            )
 
             if result.is_answered:
                 # JAVOB BERDI — buyurtmalarni belgilash, unanswered dan olib tashlash
@@ -1882,26 +1914,12 @@ class AutodialerPro:
                 self.state.last_communicated_orders[seller_phone].extend(new_ids)
                 self.state.unanswered_sellers.discard(seller_phone)
                 logger.info(f"[OK] Qo'ng'iroq muvaffaqiyatli: {seller_name} ({seller_phone})")
-                self.stats.record_call(
-                    phone=seller_phone,
-                    seller_name=seller_name,
-                    order_count=order_count,
-                    attempts=self.state.call_attempts,
-                    result=StatsCallResult.ANSWERED,
-                    order_ids=order_ids
-                )
+                self.stats.record_call(result=StatsCallResult.ANSWERED, **_common_call_kwargs)
             else:
                 # JAVOB BERMADI — keyingi siklda barcha CHECKING buyurtmalar bilan qayta qo'ng'iroq
                 self.state.unanswered_sellers.add(seller_phone)
                 logger.warning(f"[X] Qo'ng'iroq javobsiz: {seller_name} ({seller_phone}) - keyingi siklda qayta qo'ng'iroq")
-                self.stats.record_call(
-                    phone=seller_phone,
-                    seller_name=seller_name,
-                    order_count=order_count,
-                    attempts=self.state.call_attempts,
-                    result=StatsCallResult.NO_ANSWER,
-                    order_ids=order_ids
-                )
+                self.stats.record_call(result=StatsCallResult.NO_ANSWER, **_common_call_kwargs)
 
             return result
 

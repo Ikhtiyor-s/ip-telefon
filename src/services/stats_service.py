@@ -41,12 +41,23 @@ class CallRecord:
     result: str  # CallResult value
     timestamp: str
     order_ids: List[int] = field(default_factory=list)
+    started_at: str = ""        # qo'ng'iroq boshlangan vaqt (ISO)
+    answered_at: str = ""       # javob berilgan vaqt (ISO)
+    wait_seconds: int = 0       # ring vaqti (soniya)
+    duration_seconds: int = 0   # gaplashish vaqti (soniya)
+    recording_file: str = ""    # yozuv fayl nomi (extension'siz)
+    recording_url: str = ""     # yozuv URL (tashqi servis uchun)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "CallRecord":
+        # Eski ma'lumotlar uchun yangi maydonlarni qo'shish
+        for f in ("started_at", "answered_at", "recording_file", "recording_url"):
+            data.setdefault(f, "")
+        for f in ("wait_seconds", "duration_seconds"):
+            data.setdefault(f, 0)
         return cls(**data)
 
 
@@ -84,9 +95,12 @@ class DailyStats:
     total_calls: int = 0
     answered_calls: int = 0
     unanswered_calls: int = 0
-    calls_1_attempt: int = 0      # 1 ta urinishda javob
-    calls_2_attempts: int = 0     # 2 ta urinishda javob
-    calls_3_attempts: int = 0     # 3+ ta urinishda javob
+    calls_1_attempt: int = 0      # 1 ta urinishda javob berdi
+    calls_2_attempts: int = 0     # 2 ta urinishda javob berdi
+    calls_3_attempts: int = 0     # 3+ ta urinishda javob berdi
+    unanswered_1_attempt: int = 0  # 1 urinishdan keyin javobsiz
+    unanswered_2_attempts: int = 0 # 2 urinishdan keyin javobsiz
+    unanswered_3_attempts: int = 0 # 3+ urinishdan keyin javobsiz
     total_orders: int = 0
     accepted_orders: int = 0      # Qabul qilingan
     rejected_orders: int = 0      # Bekor qilingan
@@ -99,7 +113,10 @@ class DailyStats:
 
     @classmethod
     def from_dict(cls, data: dict) -> "DailyStats":
-        return cls(**data)
+        # Faqat DailyStats maydonlari qabul qilinadi (eski/noma'lum maydonlar e'tiborsiz)
+        import dataclasses
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 class StatsService:
@@ -109,10 +126,11 @@ class StatsService:
     Kunlik statistikalarni saqlaydi va ko'rsatadi
     """
 
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "data", webhook_service=None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.stats_file = self.data_dir / "stats.json"
+        self._webhook = webhook_service
 
         # Joriy kunlik statistika
         self._today_stats: Optional[DailyStats] = None
@@ -164,7 +182,13 @@ class StatsService:
         order_count: int,
         attempts: int,
         result: CallResult,
-        order_ids: List[int] = None
+        order_ids: List[int] = None,
+        started_at: str = "",
+        answered_at: str = "",
+        wait_seconds: int = 0,
+        duration_seconds: int = 0,
+        recording_file: str = "",
+        recording_url: str = "",
     ):
         """Qo'ng'iroqni qayd etish"""
         self._ensure_today()
@@ -176,7 +200,13 @@ class StatsService:
             attempts=attempts,
             result=result.value,
             timestamp=datetime.now().isoformat(),
-            order_ids=order_ids or []
+            order_ids=order_ids or [],
+            started_at=started_at,
+            answered_at=answered_at,
+            wait_seconds=wait_seconds,
+            duration_seconds=duration_seconds,
+            recording_file=recording_file,
+            recording_url=recording_url,
         )
 
         self._today_stats.call_records.append(record.to_dict())
@@ -192,9 +222,18 @@ class StatsService:
                 self._today_stats.calls_3_attempts += 1
         else:
             self._today_stats.unanswered_calls += 1
+            if attempts == 1:
+                self._today_stats.unanswered_1_attempt += 1
+            elif attempts == 2:
+                self._today_stats.unanswered_2_attempts += 1
+            else:
+                self._today_stats.unanswered_3_attempts += 1
 
         self._save_stats()
         logger.info(f"Qo'ng'iroq qayd etildi: {phone} - {result.value} ({attempts} urinish)")
+
+        if self._webhook:
+            self._webhook.schedule_event("call.completed", record.to_dict())
 
     def record_order(
         self,
@@ -240,6 +279,9 @@ class StatsService:
 
         self._save_stats()
         logger.info(f"Buyurtma qayd etildi: #{order_number} - {result.value}")
+
+        if self._webhook:
+            self._webhook.schedule_event("order.updated", record.to_dict())
 
     def get_today_stats(self) -> DailyStats:
         """Bugungi statistikani olish"""
