@@ -20,6 +20,8 @@ Muhit o'zgaruvchilari:
     WEBHOOK_PORT     — tinglash porti (default: 5000)
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -35,11 +37,28 @@ logging.basicConfig(
 logger = logging.getLogger("asterisk_webhook")
 
 # Bot X-Telegram-Bot-Secret header yuboradi → EXTERNAL_API_SECRET bilan bir xil
-WEBHOOK_SECRET = os.getenv("EXTERNAL_API_SECRET", os.getenv("WEBHOOK_SECRET", "nonbor-secret-key"))
+_raw_secret = os.getenv("EXTERNAL_API_SECRET", os.getenv("WEBHOOK_SECRET", ""))
+if not _raw_secret:
+    raise RuntimeError(
+        "EXTERNAL_API_SECRET yoki WEBHOOK_SECRET env var o'rnatilmagan! "
+        "Xavfsizlik uchun ishga tushish to'xtatildi."
+    )
+WEBHOOK_SECRET = _raw_secret
 ALERT_AUDIO    = os.getenv("ALERT_AUDIO", "/tmp/autodialer/api_alert")
 SIP_ENDPOINT   = os.getenv("SIP_ENDPOINT", "sarkor-endpoint")
 WEBHOOK_PORT   = int(os.getenv("WEBHOOK_PORT", "5000"))
 CALLER_ID      = os.getenv("CALLER_ID", "+998783331002")
+
+
+def _sanitize_audio_path(path: str) -> str:
+    """audio_path ni tozalash — faqat xavfsiz belgilar.
+    Asterisk CLI injection himoyasi: bo'shliq, newline, maxsus belgilar olib tashlanadi.
+    Faqat harf, raqam, /, _, -, . ruxsat.
+    """
+    sanitized = re.sub(r"[^\w/._\-]", "", path)
+    # Path traversal oldini olish: ../  bo'lmasin
+    sanitized = re.sub(r"\.\.+", "", sanitized)
+    return sanitized
 
 
 def _sanitize_phone(raw: str) -> str:
@@ -78,15 +97,20 @@ def _originate(phone: str, audio_path: str) -> bool:
         logger.warning(f"Noto'g'ri telefon raqami: {phone!r} — o'tkazib yuborildi")
         return False
 
+    # Audio path sanitizatsiyasi — injection himoyasi
+    safe_path = _sanitize_audio_path(audio_path)
+    if safe_path != audio_path:
+        logger.warning(f"audio_path sanitized: {audio_path!r} → {safe_path!r}")
+
     # Audio tekshirish — yo'q bo'lsa qo'ng'iroq YO'Q
-    if not _check_audio(audio_path):
+    if not _check_audio(safe_path):
         return False
 
-    # Asterisk CLI buyrug'i — to'liq sanitized argument
+    # Asterisk CLI buyrug'i — barcha qismlar sanitized
     cmd_inner = (
         f"channel originate "
         f"PJSIP/{clean}@{SIP_ENDPOINT} "
-        f"application Playback {audio_path}"
+        f"application Playback {safe_path}"
     )
     try:
         result = subprocess.run(
@@ -116,7 +140,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.headers.get("X-Telegram-Bot-Secret", "")
             or self.headers.get("X-Webhook-Secret", "")
         )
-        if secret != WEBHOOK_SECRET:
+        if not hmac.compare_digest(secret, WEBHOOK_SECRET):
             self._respond(401, {"error": "unauthorized"})
             logger.warning(f"Ruxsatsiz so'rov: {self.client_address[0]}")
             return
