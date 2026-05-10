@@ -1778,7 +1778,13 @@ class AutodialerPro:
                 logger.info(f"Buyurtma #{order_id}: biz_id={biz_id}, lang={lang!r}, phone={seller_phone}")
 
                 if not seller_phone:
-                    logger.warning(f"Buyurtma #{order_id}: sotuvchi telefoni topilmadi, qo'ng'iroq o'tkazib yuborildi")
+                    raw_phone = order_data.get("seller_phone", "")
+                    seller_name = order_data.get("seller_name", "?")
+                    logger.warning(
+                        f"Buyurtma #{order_id}: sotuvchi telefoni topilmadi — "
+                        f"biznes='{seller_name}' biz_id={biz_id} "
+                        f"raw_phone={raw_phone!r} → qo'ng'iroq O'TKAZIB YUBORILDI"
+                    )
                     continue
 
                 # MUHIM: Agar bu buyurtma haqida sotuvchiga allaqachon xabar berilgan bo'lsa, uni o'tkazib yuboramiz

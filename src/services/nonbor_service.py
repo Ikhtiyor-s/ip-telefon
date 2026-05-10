@@ -113,11 +113,21 @@ class NonborService:
         for biz in businesses:
             self._businesses_cache[biz["id"]] = biz
 
-        # Birinchi yuklashda barcha keylarni ko'rish (debug)
+        # Birinchi yuklashda barcha keylarni va telefon fieldlarini ko'rish (debug)
         if businesses and not getattr(self, "_biz_keys_logged", False):
             self._biz_keys_logged = True
             sample = businesses[0]
             logger.info(f"Biznes API fieldlari (namuna): {sorted(sample.keys())}")
+            # Telefon bo'lgan va bo'lmagan bizneslar soni
+            with_phone = sum(1 for b in businesses if b.get("phone_number") or b.get("phone"))
+            logger.info(
+                f"Bizneslar: jami={len(businesses)}, "
+                f"telefon_bor={with_phone}, telefon_yoq={len(businesses)-with_phone}"
+            )
+            if with_phone < len(businesses):
+                no_phone = [b.get("title", "?") for b in businesses
+                            if not b.get("phone_number") and not b.get("phone")][:5]
+                logger.warning(f"Telefon yo'q bizneslar (birinchi 5): {no_phone}")
 
         return businesses
 
@@ -426,10 +436,44 @@ class NonborService:
                     logger.warning(f"Biznes '{business.get('title')}' title bo'yicha ham topilmadi (cache: {len(self._businesses_cache)} ta)")
 
             if matched_biz:
-                phone = matched_biz.get("phone_number", "")
+                biz_id_log = result.get("business_id") or matched_biz.get("id")
+
+                # Telefon raqamini bir nechta maydondan qidirish
+                phone = (
+                    matched_biz.get("phone_number") or
+                    matched_biz.get("phone") or
+                    matched_biz.get("mobile") or
+                    matched_biz.get("contact_phone") or
+                    matched_biz.get("seller_phone") or
+                    ""
+                )
+
+                # Hali ham yo'q — detail endpoint dan urinish
+                if not phone and biz_id_log:
+                    try:
+                        detail = await self.get_business_detail(int(biz_id_log))
+                        if detail:
+                            phone = (
+                                detail.get("phone_number") or
+                                detail.get("phone") or
+                                detail.get("mobile") or
+                                detail.get("contact_phone") or
+                                ""
+                            )
+                            if phone:
+                                logger.info(f"Biznes #{biz_id_log} telefoni detail endpointdan topildi: {phone}")
+                    except Exception as e:
+                        logger.warning(f"Biznes #{biz_id_log} detail olishda xato: {e}")
+
                 if phone:
                     result["seller_phone"] = f"+{phone}" if not phone.startswith("+") else phone
-                biz_id_log = result.get("business_id") or matched_biz.get("id")
+                    logger.info(f"Biznes #{biz_id_log} tel: {result['seller_phone']}")
+                else:
+                    logger.warning(
+                        f"Biznes #{biz_id_log} ('{matched_biz.get('title')}') uchun "
+                        f"telefon raqami topilmadi. "
+                        f"Mavjud maydonlar: {sorted(matched_biz.keys())}"
+                    )
 
                 def _extract_lang(obj: dict) -> str:
                     """Dict dan til maydonini qidirish"""
