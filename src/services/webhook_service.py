@@ -180,14 +180,14 @@ class WebhookService:
     async def _send_trusted(self, session: aiohttp.ClientSession, event: str, payload: str):
         """admin.nonbor uchun ichki kanal — SSRF himoyasisiz, env var orqali sozlangan."""
         import os
-        api_secret = os.getenv("API_SECRET_KEY", "")
+        nonbor_secret = os.getenv("NONBOR_SECRET", "")
         headers = {
             "Content-Type": "application/json",
             "X-Webhook-Event": event,
             "User-Agent": "AutodialerWebhook/1.0",
         }
-        if api_secret:
-            headers["X-API-Key"] = api_secret
+        if nonbor_secret:
+            headers["X-Telegram-Bot-Secret"] = nonbor_secret
         try:
             async with session.post(
                 self._trusted_url,
