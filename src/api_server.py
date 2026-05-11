@@ -1206,7 +1206,8 @@ class AutodialerAPI:
           }
         """
         # Secret key tekshirish
-        expected = os.getenv("EXTERNAL_API_SECRET", os.getenv("API_SECRET_KEY", "nonbor-secret-key"))
+        # NONBOR_SECRET — Nonbor bot bilan umumiy kalit (nonbor-secret-key)
+        expected = os.getenv("NONBOR_SECRET", os.getenv("EXTERNAL_API_SECRET", "nonbor-secret-key"))
         incoming = request.headers.get("X-Telegram-Bot-Secret", "")
         if incoming != expected:
             logger.warning(f"Bot notify: noto'g'ri secret ({request.remote})")
