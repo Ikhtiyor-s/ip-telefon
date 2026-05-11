@@ -386,10 +386,7 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=max_attempts,
                 retry_interval_override=retry_interval,
-<<<<<<< HEAD
-=======
                 context="autodialer-dynamic",
->>>>>>> 20354ce (feat: /notify webhook — bot api_down signalida admin chaqiradi)
             )
             answered = bool(result and result.is_answered)
             asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
@@ -410,10 +407,7 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=self.config.get("max_call_attempts", 2),
                 retry_interval_override=self.config.get("retry_interval", 30),
-<<<<<<< HEAD
-=======
                 context="autodialer-dynamic",
->>>>>>> 20354ce (feat: /notify webhook — bot api_down signalida admin chaqiradi)
             )
             answered = bool(result and result.is_answered)
             asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
