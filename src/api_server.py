@@ -1245,7 +1245,31 @@ class AutodialerAPI:
                 f"Iltimos, texnik xizmat bilan bog'laning."
             )
 
-            async def _do_call():
+            # API URL — tekshirish uchun
+            api_url = os.getenv("NONBOR_BASE_URL", "").rstrip("/") + "/telegram_bot/get-order-for-courier/"
+            api_secret = os.getenv("NONBOR_SECRET", "nonbor-secret-key")
+
+            async def _verify_and_call():
+                """Qo'ng'iroqdan oldin APIni qayta tekshirish"""
+                still_down = True
+                if api_url and "nonbor" in api_url:
+                    try:
+                        async with aiohttp.ClientSession(
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as sess:
+                            async with sess.get(
+                                api_url,
+                                headers={"X-Telegram-Bot-Secret": api_secret}
+                            ) as resp:
+                                if resp.status < 500:
+                                    still_down = False
+                                    logger.info(f"Bot notify: API tekshirildi — tiklangan, qo'ng'iroq bekor")
+                    except Exception:
+                        still_down = True  # Tekshirishda xato = hali ishlamayapti
+
+                if not still_down:
+                    return  # API tiklangan — qo'ng'iroq shart emas
+
                 for phone in phones:
                     try:
                         logger.info(f"Bot notify: {phone} ga qo'ng'iroq ({reason})")
@@ -1259,7 +1283,7 @@ class AutodialerAPI:
                     except Exception as e:
                         logger.error(f"Bot notify qo'ng'iroq xato ({phone}): {e}")
 
-            asyncio.create_task(_do_call())
+            asyncio.create_task(_verify_and_call())
 
             return self._json({
                 "ok": True,
