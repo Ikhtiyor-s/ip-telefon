@@ -70,8 +70,10 @@ class AutodialerAPI:
         if request.method == "OPTIONS":
             resp = web.Response()
         else:
-            # Health endpoint — ochiq
-            if request.path == "/api/autodialer/health":
+            # Health + bot webhook — ochiq (o'z auth logikasi bor)
+            if (request.path == "/api/autodialer/health"
+                    or request.path.startswith("/api/autodialer/audio/")
+                    or request.path == "/notify"):
                 try:
                     resp = await handler(request)
                 except web.HTTPException as ex:
@@ -145,6 +147,10 @@ class AutodialerAPI:
         r.add_delete("/api/autodialer/webhooks/{wid}", self.remove_webhook)
         r.add_post("/api/autodialer/webhooks/{wid}/toggle", self.toggle_webhook)
         r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
+        # Audio fayllar — Asterisk uchun (auth shart emas, localhost dan)
+        r.add_get("/api/autodialer/audio/{filename}", self.serve_audio)
+        # Telegram bot webhook — API ishlamasa darhol admin chaqirish
+        r.add_post("/notify", self.handle_bot_notify)
         # OPTIONS preflight uchun
         r.add_route("OPTIONS", "/{path:.*}", self._options_handler)
 
@@ -1150,33 +1156,120 @@ class AutodialerAPI:
     # ===== RECORDINGS =====
 
     async def get_recording(self, request):
-        """Qo'ng'iroq yozuvini yuborish
-
-        GET /api/autodialer/recordings/{filename}
-        filename: 20240509_135600_998901234567.wav
-        """
+        """Qo'ng'iroq yozuvini yuborish"""
         filename = request.match_info["filename"]
-
-        # Faqat .wav fayllar, path traversal oldini olish
         import re as _re
         if not _re.match(r'^[\w\-]+\.wav$', filename):
             return self._err("Noto'g'ri fayl nomi", status=400)
-
         record_dir = os.getenv("CALL_RECORD_DIR", "/var/spool/asterisk/recording")
         filepath = Path(record_dir) / filename
-
         if not filepath.exists():
             return self._err("Fayl topilmadi", status=404)
-
-        return web.FileResponse(
-            filepath,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Type": "audio/wav",
-            }
-        )
+        return web.FileResponse(filepath, headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "audio/wav",
+        })
 
     # ===== HEALTH =====
+
+    async def serve_audio(self, request):
+        """TTS audio faylni HTTP orqali uzatish — Asterisk AGI/CURL uchun."""
+        import re, os
+        from pathlib import Path
+        filename = request.match_info.get("filename", "")
+        # Xavfsizlik: faqat hex.wav formatga ruxsat
+        if not re.fullmatch(r"[a-f0-9]{32}\.wav", filename):
+            return web.Response(status=400, text="Invalid filename")
+        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", "/app/audio")
+        cache_dir = Path(sounds_path) / "cache"
+        filepath = cache_dir / filename
+        if not filepath.exists():
+            return web.Response(status=404, text="Audio not found")
+        return web.FileResponse(
+            filepath,
+            headers={"Content-Type": "audio/wav", "Cache-Control": "no-store"},
+        )
+
+    async def handle_bot_notify(self, request):
+        """
+        Telegram bot webhook — Nonbor API ishlamasa darhol signal.
+
+        POST /notify
+        Header: X-Telegram-Bot-Secret: <secret>
+        Body:
+          {
+            "event": "api_down",
+            "reason": "Nonbor API 5 daqiqadan beri ishlamayapti",
+            "admin_phone": "+998...",   # ixtiyoriy, override
+            "down_since": "...",
+            "sound": "api_down"         # ixtiyoriy
+          }
+        """
+        # Secret key tekshirish
+        expected = os.getenv("EXTERNAL_API_SECRET", os.getenv("API_SECRET_KEY", "nonbor-secret-key"))
+        incoming = request.headers.get("X-Telegram-Bot-Secret", "")
+        if incoming != expected:
+            logger.warning(f"Bot notify: noto'g'ri secret ({request.remote})")
+            return web.Response(status=401, text="Unauthorized")
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400, text="Invalid JSON")
+
+        event = body.get("event", "")
+        reason = body.get("reason", "Server signali")
+        override_phone = body.get("admin_phone", "")
+        sound = body.get("sound", "api_down")
+
+        logger.info(f"Bot notify: event={event}, reason={reason}")
+
+        if event == "api_down":
+            if not self._admin_svc:
+                logger.warning("Bot notify: AdminCallService mavjud emas")
+                return self._json({"ok": False, "error": "admin_svc unavailable"})
+
+            phones = self._admin_svc._get_enabled_phones()
+            if override_phone and override_phone not in phones:
+                phones = [override_phone] + phones
+
+            if not phones:
+                logger.warning("Bot notify: admin raqamlari yo'q")
+                return self._json({"ok": False, "error": "no phones"})
+
+            # TTS matn tayyorlash
+            tts_text = (
+                f"Diqqat! Nonbor server bilan aloqa uzildi. "
+                f"{reason}. "
+                f"Iltimos, texnik xizmat bilan bog'laning."
+            )
+
+            async def _do_call():
+                for phone in phones:
+                    try:
+                        logger.info(f"Bot notify: {phone} ga qo'ng'iroq ({reason})")
+                        await self._admin_svc.call_with_message(
+                            phone=phone,
+                            text=tts_text,
+                            lang=self._admin_svc.config.get("new_business_call_language", "uz"),
+                            sound_key=sound,
+                        )
+                        break  # Birinchi javob bergan raqamdan keyin to'xtatish
+                    except Exception as e:
+                        logger.error(f"Bot notify qo'ng'iroq xato ({phone}): {e}")
+
+            asyncio.create_task(_do_call())
+
+            return self._json({
+                "ok": True,
+                "event": event,
+                "phones": phones,
+                "message": "Qo'ng'iroq boshlandi",
+            })
+
+        # Boshqa eventlar uchun
+        logger.info(f"Bot notify: noma'lum event '{event}' — o'tkazib yuborildi")
+        return self._json({"ok": True, "event": event, "action": "ignored"})
 
     async def health(self, request):
         """Health check"""

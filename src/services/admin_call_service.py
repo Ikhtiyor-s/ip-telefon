@@ -346,6 +346,34 @@ class AdminCallService:
         else:
             await self._call_sequential(phones, audio_path, purpose)
 
+    async def _report_call(self, phone: str, answered: bool, duration: int = 0):
+        """Admin qo'ng'iroqni backend ga yuborish."""
+        report_url = os.getenv("CALL_REPORT_URL", "").strip()
+        if not report_url:
+            return
+        secret = os.getenv("NONBOR_SECRET", "")
+        payload = {
+            "event": "call.completed",
+            "data": {
+                "phone":            phone,
+                "seller_name":      "",
+                "result":           "answered" if answered else "no_answer",
+                "started_at":       datetime.now().isoformat(),
+                "duration_seconds": duration,
+            }
+        }
+        try:
+            import aiohttp as _aio
+            async with _aio.ClientSession() as sess:
+                async with sess.post(
+                    report_url, json=payload,
+                    headers={"X-Telegram-Bot-Secret": secret, "X-Webhook-Event": "call.completed"},
+                    timeout=_aio.ClientTimeout(total=8),
+                ) as resp:
+                    logger.info(f"Admin call log [{phone}] → HTTP {resp.status}")
+        except Exception as e:
+            logger.warning(f"Admin call log xato [{phone}]: {e}")
+
     async def _call_sequential(self, phones: List[str], audio_path: str, purpose: str):
         """Ketma-ket qo'ng'iroq: birinchisi javob bermasa keyingisiga"""
         max_attempts = self.config.get("max_call_attempts", 2)
@@ -358,8 +386,14 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=max_attempts,
                 retry_interval_override=retry_interval,
+<<<<<<< HEAD
+=======
+                context="autodialer-dynamic",
+>>>>>>> 20354ce (feat: /notify webhook — bot api_down signalida admin chaqiradi)
             )
-            if result and result.is_answered:
+            answered = bool(result and result.is_answered)
+            asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
+            if answered:
                 logger.info(f"Admin qo'ng'iroq [{purpose}]: {phone} - JAVOB BERILDI")
                 return
             logger.info(f"Admin qo'ng'iroq [{purpose}]: {phone} - javob berilmadi, keyingisi...")
@@ -376,8 +410,13 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=self.config.get("max_call_attempts", 2),
                 retry_interval_override=self.config.get("retry_interval", 30),
+<<<<<<< HEAD
+=======
+                context="autodialer-dynamic",
+>>>>>>> 20354ce (feat: /notify webhook — bot api_down signalida admin chaqiradi)
             )
-            answered = result and result.is_answered
+            answered = bool(result and result.is_answered)
+            asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
             logger.info(f"Admin [{purpose}]: {phone} - {'JAVOB' if answered else 'javobsiz'}")
             return answered
 
@@ -544,6 +583,47 @@ class AdminCallService:
             pass
 
     # ── Test qo'ng'iroq ──
+
+    async def call_with_message(self, phone: str, text: str,
+                                lang: str = "uz", sound_key: str = "alert") -> bool:
+        """
+        Berilgan raqamga TTS xabar bilan qo'ng'iroq.
+        Telegram bot webhook (api_down signali) dan chaqiriladi.
+        """
+        import hashlib
+        from pathlib import Path
+
+        if self.skip_asterisk:
+            logger.info(f"call_with_message skip ({phone}): {text[:60]}")
+            return True
+
+        try:
+            # TTS audio yaratish
+            h = hashlib.md5(f"{text}{lang}".encode()).hexdigest()
+            sounds_path = Path(os.getenv("ASTERISK_SOUNDS_PATH", "/app/audio"))
+            cache_dir = sounds_path / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = cache_dir / f"{h}.wav"
+
+            if not audio_path.exists():
+                ok = await self.tts.synthesize(text, audio_path)
+                if not ok:
+                    logger.error(f"call_with_message: TTS yaratilmadi")
+                    return False
+
+            logger.info(f"call_with_message: {phone} — '{text[:60]}'")
+            result = await self.call_manager.make_call_with_retry(
+                phone=phone,
+                audio_path=str(audio_path),
+                max_attempts=1,
+            )
+            answered = result.answered if hasattr(result, 'answered') else bool(result)
+            await self._report_call(phone, answered=answered)
+            return bool(success)
+
+        except Exception as e:
+            logger.exception(f"call_with_message xato ({phone}): {e}")
+            return False
 
     async def test_call(self, lang: str = None) -> dict:
         """Test qo'ng'iroq - haqiqiy CHECKING ma'lumotlar bilan"""
