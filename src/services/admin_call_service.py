@@ -274,7 +274,7 @@ class AdminCallService:
 
     async def _call_admin_new_business(self, checking_count: int):
         lang = self.config.get("new_business_call_language", "uz")
-        audio = await self.tts.generate_admin_new_business(checking_count, lang=lang)
+        audio = await self.tts.generate_multilang_admin_new_business(checking_count)
         if not audio:
             logger.error("Admin: TTS audio yaratilmadi")
             return
@@ -319,7 +319,7 @@ class AdminCallService:
         product_count = await self.nonbor.get_checking_products_count()
 
         lang = self.config.get("daily_report_language", "uz")
-        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+        audio = await self.tts.generate_multilang_admin_new_business(biz_count)
 
         if not audio:
             logger.error("Admin: kunlik hisobot TTS xatosi")
@@ -635,7 +635,7 @@ class AdminCallService:
             biz_count = 0
             product_count = 0
 
-        audio = await self.tts.generate_admin_daily_report(biz_count, product_count, lang=lang)
+        audio = await self.tts.generate_multilang_admin_new_business(biz_count)
         if not audio:
             return {"success": False, "error": "TTS audio yaratilmadi"}
 

@@ -3,6 +3,8 @@ services:
     image: andrius/asterisk:latest
     container_name: autodialer-asterisk
     restart: unless-stopped
+    networks:
+      - autodialer-net
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
@@ -25,7 +27,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
   autodialer:
     build:
       context: .
@@ -33,6 +34,8 @@ services:
     image: autodialer-pro:latest
     container_name: autodialer-pro
     restart: unless-stopped
+    networks:
+      - autodialer-net
     ports:
       - "8585:8585"
     depends_on:
@@ -48,7 +51,9 @@ services:
       - .env.production
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
+networks:
+  autodialer-net:
+    driver: bridge
 volumes:
   autodialer-audio:
   call-recordings:

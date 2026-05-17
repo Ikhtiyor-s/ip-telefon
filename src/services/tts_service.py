@@ -393,6 +393,37 @@ class TTSService:
         """Admin: yangi biznes ochildi, N ta restoran tekshiruvda"""
         return await self._synthesize_with_cache(_admin_new_business_text(count, _normalize_lang(lang)), _normalize_lang(lang))
 
+
+    async def generate_multilang_admin_new_business(self, count: int) -> Optional[Path]:
+        """Admin uchun 3 tilda birlashtirilgan audio (uz+ru+en)"""
+        output_file = self.cache_dir / f"multilang_admin_biz_{count}.wav"
+        if output_file.exists():
+            return output_file
+        
+        uz = await self._synthesize_with_cache(_admin_new_business_text(count, "uz"), "uz")
+        ru = await self._synthesize_with_cache(_admin_new_business_text(count, "ru"), "ru")
+        en = await self._synthesize_with_cache(_admin_new_business_text(count, "en"), "en")
+        
+        if uz and ru and en:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(uz), "-i", str(ru), "-i", str(en),
+                "-filter_complex", "[0:a][1:a][2:a]concat=n=3:v=0:a=1[out]",
+                "-map", "[out]", str(output_file)
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.wait()
+            if output_file.exists():
+                logger.info(f"Multilang admin audio yaratildi: {output_file}")
+                return output_file
+        
+        logger.warning("Multilang admin audio xato, uz fallback")
+        return uz
+
     async def generate_admin_morning_report(self, biz_count: int, night_count: int, lang: str = DEFAULT_LANG) -> Optional[Path]:
         """Admin: ertalabki hisobot"""
         lang = _normalize_lang(lang)

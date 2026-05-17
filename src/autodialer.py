@@ -1,6 +1,5 @@
 """
 Autodialer Pro - Asosiy Servis
-================================================================================
 
 Professional autodialer tizimi - Nonbor API buyurtmalarini kuzatish va
 sotuvchilarga avtomatik qo'ng'iroq qilish
@@ -12,8 +11,6 @@ Jarayon:
 4. Javob bo'lmasa → yana qo'ng'iroq (max 2 marta)
 5. 3 daqiqada Telegram xabar
 6. Status o'zgarsa → Telegram xabar o'chiriladi
-
-================================================================================
 """
 
 import asyncio
