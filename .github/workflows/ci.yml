@@ -1,0 +1,100 @@
+name: CI — Testlar va Xavfsizlik
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Testlar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kod olish
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 o'rnatish
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: ffmpeg o'rnatish (audio konversiya uchun)
+        run: sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Dependensiyalar
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio aiohttp python-dotenv edge-tts gtts
+
+      - name: Testlarni ishga tushirish
+        run: pytest tests/ -v --tb=short -x
+        env:
+          NONBOR_BASE_URL: "https://test.nonbor.uz/api/v2"
+          NONBOR_SECRET: "ci-test-nonbor-secret-key-minimum"
+          TELEGRAM_BOT_TOKEN: "0000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          TELEGRAM_CHAT_ID: "-1001234567890"
+          AMI_HOST: "127.0.0.1"
+          AMI_PASSWORD: "ci-test-ami-password"
+          API_SECRET_KEY: "ci-test-api-key-minimum-32-characters"
+          EXTERNAL_API_SECRET: "ci-test-external-32-chars-long-key"
+          WEBHOOK_SECRET: "ci-test-webhook-32-chars-long-key"
+          SIP_USERNAME: "ci-test-user"
+          SIP_PASSWORD: "ci-test-password"
+          ASTERISK_SOUNDS_PATH: "/tmp/test-audio"
+          ASTERISK_PLAYBACK_PATH: "/tmp/test-audio/cache"
+
+  security:
+    name: Xavfsizlik tekshiruvi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kod olish
+        uses: actions/checkout@v4
+
+      - name: pjsip.conf hardcoded credentials yo'qligi
+        run: |
+          echo "=== pjsip.conf tekshirilmoqda ==="
+          if grep -E "^(username|password|contact_user|from_user)\s*=\s*[a-zA-Z0-9]{4,}$" \
+               config/asterisk/pjsip.conf; then
+            echo "❌ XATO: pjsip.conf da hardcoded credentials!"
+            exit 1
+          fi
+          echo "✅ pjsip.conf ENV var ishlatmoqda"
+
+      - name: Maxfiy .env fayllar git'da yo'qligi
+        run: |
+          if git ls-files | grep -E "^\.env\.(production|prod|secret)$"; then
+            echo "❌ XATO: Maxfiy .env fayli git'da!"
+            exit 1
+          fi
+          echo "✅ Maxfiy .env fayllar git'da yo'q"
+
+      - name: Python fayllarida ochiq parol yo'qligi
+        run: |
+          python3 - << 'EOF'
+          import re, sys
+          from pathlib import Path
+
+          SRC = Path("src")
+          ALLOWED = {"nonbor-secret-key", "autodialer123", "your-", "test-", "<"}
+          PATTERN = re.compile(
+              r'(?:password|secret)\s*=\s*["\']([a-zA-Z0-9!@#]{8,})["\']',
+              re.IGNORECASE
+          )
+          errors = []
+          for f in SRC.rglob("*.py"):
+              content = f.read_text(errors="ignore")
+              for m in PATTERN.finditer(content):
+                  val = m.group(1)
+                  if not any(a.lower() in val.lower() for a in ALLOWED):
+                      line = content[:m.start()].count("\n") + 1
+                      errors.append(f"{f}:{line} — {m.group()[:50]}")
+          if errors:
+              print("❌ Hardcoded credentials:")
+              print("\n".join(errors))
+              sys.exit(1)
+          print("✅ Hardcoded credentials topilmadi")
+          EOF
