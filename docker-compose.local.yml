@@ -20,12 +20,14 @@ services:
       - "5038:5038"
       - "10000-10100:10000-10100/udp"
     volumes:
-      - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./config/asterisk/pjsip.local.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.local.conf:/etc/asterisk/manager.conf:ro
       - autodialer-audio:/tmp/autodialer-audio
       - call-recordings:/var/spool/asterisk/recording
       - asterisk-logs:/var/log/asterisk
+    env_file:
+      - .env.local
     environment:
       - TZ=Asia/Tashkent
     healthcheck:

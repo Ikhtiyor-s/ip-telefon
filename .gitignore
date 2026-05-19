@@ -15,3 +15,4 @@ test_voices/
 nul
 audio/cache/
 docker-compose.override.yml
+config/asterisk/pjsip.local.conf
