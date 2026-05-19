@@ -419,9 +419,8 @@ class AsteriskAMI:
             return CallResult(status=CallStatus.FAILED, error=str(e))
 
         # Audio faylni Asterisk o'qiydigan pathga aylantirish
-        # audio_file, audio_uz, audio_ru — autodialer cache'dagi haqiqiy fayllar
-        # Bu yerda faqat path'ni stem'ga aylantirish kerak (ensure_for_asterisk allaqachon ko'chirgan)
         import os
+        http_audio_url = os.getenv("ASTERISK_HTTP_AUDIO_URL", "").rstrip("/")
         default_playback = "/tmp/autodialer" if os.name == "nt" else "/var/lib/asterisk/sounds/autodialer"
         playback_path = os.getenv(
             "ASTERISK_PLAYBACK_PATH",
@@ -429,10 +428,20 @@ class AsteriskAMI:
         )
 
         def _asterisk_path(src: str) -> str:
-            """Fayl yo'lini Asterisk playback path'ga o'zgartirish (extension'siz)"""
+            """Fayl yo'lini Asterisk uchun to'g'ri pathga aylantirish.
+
+            ASTERISK_HTTP_AUDIO_URL sozlangan bo'lsa:
+              → http://host:port/api/autodialer/audio/filename
+              (Asterisk curl yordamida yuklab o'ynaydi)
+            Aks holda:
+              → /local/path/filename  (shared volume)
+            """
             if not src:
                 return ""
-            return f"{playback_path}/{Path(str(src)).stem}"
+            stem = Path(str(src)).stem
+            if http_audio_url:
+                return f"{http_audio_url}/{stem}.wav"
+            return f"{playback_path}/{stem}"
 
         def _check_file(src: str, label: str) -> bool:
             """Faylni tekshirish — mavjud va bo'sh emasmi"""

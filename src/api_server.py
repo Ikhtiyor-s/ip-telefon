@@ -132,6 +132,8 @@ class AutodialerAPI:
         r.add_get("/api/autodialer/health", self.health)
         # Recordings
         r.add_get("/api/autodialer/recordings/{filename}", self.get_recording)
+        # Audio — Asterisk uchun TTS fayllarni HTTP orqali berish (auth kerak emas)
+        r.add_get("/api/autodialer/audio/{filename}", self.serve_audio)
         # AI trigger — biznes ID bo'yicha qo'ng'iroq
         r.add_post("/api/autodialer/call-business", self.call_business)
         # Admin call management
@@ -1152,6 +1154,39 @@ class AutodialerAPI:
 
         asyncio.create_task(_fire())
         return self._ok({"message": "Test event yuborildi", "webhook_id": wid})
+
+    # ===== AUDIO (Asterisk uchun) =====
+
+    async def serve_audio(self, request):
+        """TTS audio fayllarini Asterisk ga HTTP orqali berish.
+
+        GET /api/autodialer/audio/{filename}
+        Auth kerak emas — Asterisk dialplan'dan chaqiriladi.
+        filename: hash.wav yoki hash (extension'siz)
+        """
+        import re as _re
+        filename = request.match_info["filename"]
+        # .wav qo'shish (yo'q bo'lsa)
+        if not filename.endswith(".wav"):
+            filename += ".wav"
+        # Faqat xavfsiz belgilar
+        if not _re.match(r'^[\w\-\.]+\.wav$', filename):
+            return web.Response(status=400)
+
+        audio_dir = Path(os.getenv("ASTERISK_SOUNDS_PATH", "audio"))
+        filepath = audio_dir / "cache" / filename
+        if not filepath.exists():
+            logger.warning(f"Audio topilmadi: {filepath}")
+            return web.Response(status=404)
+
+        return web.FileResponse(
+            filepath,
+            headers={
+                "Content-Type": "audio/wav",
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "Cache-Control": "max-age=3600",
+            }
+        )
 
     # ===== RECORDINGS =====
 
