@@ -149,8 +149,6 @@ class AutodialerAPI:
         r.add_delete("/api/autodialer/webhooks/{wid}", self.remove_webhook)
         r.add_post("/api/autodialer/webhooks/{wid}/toggle", self.toggle_webhook)
         r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
-        # Audio fayllar — Asterisk uchun (auth shart emas, localhost dan)
-        r.add_get("/api/autodialer/audio/{filename}", self.serve_audio)
         # Telegram bot webhook — API ishlamasa darhol admin chaqirish
         r.add_post("/notify", self.handle_bot_notify)
         # OPTIONS preflight uchun
@@ -1206,24 +1204,6 @@ class AutodialerAPI:
         })
 
     # ===== HEALTH =====
-
-    async def serve_audio(self, request):
-        """TTS audio faylni HTTP orqali uzatish — Asterisk AGI/CURL uchun."""
-        import re, os
-        from pathlib import Path
-        filename = request.match_info.get("filename", "")
-        # Xavfsizlik: faqat hex.wav formatga ruxsat
-        if not re.fullmatch(r"[a-f0-9]{32}\.wav", filename):
-            return web.Response(status=400, text="Invalid filename")
-        sounds_path = os.getenv("ASTERISK_SOUNDS_PATH", "/app/audio")
-        cache_dir = Path(sounds_path) / "cache"
-        filepath = cache_dir / filename
-        if not filepath.exists():
-            return web.Response(status=404, text="Audio not found")
-        return web.FileResponse(
-            filepath,
-            headers={"Content-Type": "audio/wav", "Cache-Control": "no-store"},
-        )
 
     async def handle_bot_notify(self, request):
         """
