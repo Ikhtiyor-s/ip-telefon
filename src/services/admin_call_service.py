@@ -386,7 +386,6 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=max_attempts,
                 retry_interval_override=retry_interval,
-                context="autodialer-dynamic",
             )
             answered = bool(result and result.is_answered)
             asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
@@ -407,7 +406,6 @@ class AdminCallService:
                 audio_file=audio_path,
                 max_attempts_override=self.config.get("max_call_attempts", 2),
                 retry_interval_override=self.config.get("retry_interval", 30),
-                context="autodialer-dynamic",
             )
             answered = bool(result and result.is_answered)
             asyncio.create_task(self._report_call(phone, answered, getattr(result, "duration", 0) or 0))
