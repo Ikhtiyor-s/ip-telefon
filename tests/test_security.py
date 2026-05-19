@@ -48,7 +48,8 @@ def test_pjsip_uses_env_vars():
 
 def test_no_hardcoded_passwords_in_config():
     """Config fayllarida hardcoded parollar bo'lmasligi kerak."""
-    conf_files = list((ROOT / "config").rglob("*.conf"))
+    # .local.conf fayllar gitignored va local dev uchun — tekshirilmaydi
+    conf_files = [f for f in (ROOT / "config").rglob("*.conf") if ".local." not in f.name]
     pattern = re.compile(r'^password\s*=\s*(?!\$\{ENV\()([a-zA-Z0-9]{6,})\s*$', re.MULTILINE)
 
     for f in conf_files:

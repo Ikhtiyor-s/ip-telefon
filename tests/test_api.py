@@ -153,8 +153,8 @@ async def test_recording_path_traversal_blocked(api):
             "/api/autodialer/recordings/../etc/passwd.wav",
             headers={"X-API-Key": "test-key-for-unit-test"}
         )
-        # 400 yoki 404 bo'lishi kerak, 200 emas
-        assert resp.status in (400, 404)
+        # 400, 404 yoki 405 bo'lishi kerak (aiohttp URL'ni normallashtiradi, 200 emas)
+        assert resp.status in (400, 404, 405)
 
 
 @pytest.mark.asyncio
@@ -168,4 +168,4 @@ async def test_recording_invalid_filename_rejected(api):
             "/api/autodialer/recordings/../../secret.wav",
             headers={"X-API-Key": "test-key-for-unit-test"}
         )
-        assert resp.status in (400, 404)
+        assert resp.status in (400, 404, 405)
