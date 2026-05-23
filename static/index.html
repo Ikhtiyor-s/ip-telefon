@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoDialer Pro</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #14161f;
+  --surface3: #252836;
+  --border: #2a2d3a;
+  --primary: #6c63ff;
+  --primary-dim: rgba(108,99,255,0.15);
+  --text: #e8eaf0;
+  --text-muted: #8b8fa8;
+  --green: #22c55e;
+  --orange: #f59e0b;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; }
+
+/* ─── LOGIN ──────────────────────────────────────────────────────────── */
+#login-page {
+  display: flex; align-items: center; justify-content: center;
+  height: 100vh; background: var(--bg);
+}
+.login-card {
+  width: 400px; background: var(--surface); border-radius: 20px;
+  padding: 40px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.login-logo {
+  width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 20px;
+  background: linear-gradient(135deg, var(--primary), var(--blue));
+  display: flex; align-items: center; justify-content: center;
+}
+.login-logo svg { width: 32px; height: 32px; fill: white; }
+.login-card h1 { text-align: center; font-size: 22px; margin-bottom: 4px; }
+.login-card p { text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 32px; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.field input {
+  width: 100%; background: var(--surface3); border: 1.5px solid transparent;
+  border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text);
+  font-size: 14px; outline: none; transition: border-color .2s;
+}
+.field input:focus { border-color: var(--primary); }
+.btn-primary {
+  width: 100%; padding: 12px; background: var(--primary); color: white;
+  border: none; border-radius: var(--radius-sm); font-size: 15px;
+  font-weight: 600; cursor: pointer; transition: opacity .2s; margin-top: 8px;
+}
+.btn-primary:hover { opacity: .9; }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+.error-box {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+  border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px;
+  color: var(--red); margin-bottom: 12px; display: none;
+}
+
+/* ─── MAIN LAYOUT ────────────────────────────────────────────────────── */
+#main-page { display: none; height: 100vh; flex-direction: row; }
+
+/* Sidebar */
+.sidebar {
+  width: 220px; background: var(--surface2); display: flex;
+  flex-direction: column; padding: 20px 0; flex-shrink: 0;
+}
+.sidebar-logo {
+  display: flex; align-items: center; gap: 10px; padding: 0 20px 28px;
+}
+.sidebar-logo .icon {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: linear-gradient(135deg, var(--primary), var(--blue));
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.sidebar-logo .icon svg { width: 18px; height: 18px; fill: white; }
+.sidebar-logo .name { font-weight: 700; font-size: 14px; }
+.sidebar-logo .sub { font-size: 11px; color: var(--text-muted); }
+
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 11px 16px;
+  margin: 2px 10px; border-radius: 12px; cursor: pointer; font-size: 14px;
+  color: var(--text-muted); transition: all .15s; user-select: none;
+}
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.nav-item:hover { background: rgba(255,255,255,.04); color: var(--text); }
+.nav-item.active { background: var(--primary-dim); color: var(--primary); font-weight: 600; }
+
+.sidebar-footer { margin-top: auto; padding: 16px 16px 0; }
+.server-pill {
+  background: var(--surface); border-radius: 10px; padding: 10px 12px;
+  font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px; overflow: hidden;
+}
+.server-pill .dot { width: 7px; height: 7px; background: var(--green);
+  border-radius: 50%; flex-shrink: 0; }
+.server-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-logout {
+  width: 100%; padding: 9px; background: rgba(239,68,68,.08); color: var(--red);
+  border: none; border-radius: 10px; font-size: 13px; cursor: pointer;
+  transition: background .2s;
+}
+.btn-logout:hover { background: rgba(239,68,68,.15); }
+
+/* Content */
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  height: 56px; background: var(--surface2); display: flex; align-items: center;
+  padding: 0 24px; gap: 20px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.topbar-left { flex: 1; font-size: 13px; color: var(--text-muted); }
+.indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+.indicator .dot.on { background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+.btn-icon {
+  width: 34px; height: 34px; background: none; border: none; border-radius: 8px;
+  color: var(--text-muted); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; transition: background .2s;
+}
+.btn-icon:hover { background: rgba(255,255,255,.06); }
+.btn-icon svg { width: 18px; height: 18px; }
+
+.tab-content { flex: 1; overflow-y: auto; padding: 24px; display: none; }
+.tab-content.active { display: block; }
+
+/* ─── CARDS ──────────────────────────────────────────────────────────── */
+.section-title { font-size: 17px; font-weight: 700; margin-bottom: 20px; }
+.cards-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; margin-bottom: 28px; }
+.stat-card {
+  background: var(--surface); border-radius: var(--radius); padding: 20px;
+  display: flex; align-items: center; gap: 16px;
+}
+.stat-icon {
+  width: 52px; height: 52px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.stat-icon svg { width: 26px; height: 26px; }
+.stat-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.stat-value { font-size: 26px; font-weight: 700; line-height: 1; }
+.stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+/* Status tiles */
+.status-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 28px; }
+.status-tile {
+  background: var(--surface); border-radius: var(--radius); padding: 18px;
+  display: flex; align-items: center; gap: 14px; border: 1px solid transparent;
+}
+.status-tile.ok { border-color: rgba(34,197,94,.2); }
+.status-tile.err { border-color: rgba(239,68,68,.2); }
+.status-tile svg { width: 26px; height: 26px; flex-shrink: 0; }
+.status-tile .label { font-size: 12px; color: var(--text-muted); }
+.status-tile .val { font-size: 14px; font-weight: 600; }
+
+/* ─── TABLE ──────────────────────────────────────────────────────────── */
+.table-card { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+.table-toolbar {
+  display: flex; align-items: center; gap: 12px; padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.search-box {
+  flex: 1; display: flex; align-items: center; gap: 8px;
+  background: var(--surface3); border-radius: var(--radius-sm); padding: 8px 12px;
+}
+.search-box svg { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
+.search-box input {
+  background: none; border: none; outline: none; color: var(--text);
+  font-size: 13px; width: 100%;
+}
+.filter-chips { display: flex; gap: 6px; }
+.chip {
+  padding: 5px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;
+  background: var(--surface3); color: var(--text-muted); border: 1px solid transparent;
+  transition: all .15s; white-space: nowrap;
+}
+.chip.active { background: var(--primary-dim); color: var(--primary); border-color: rgba(108,99,255,.4); }
+
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table thead tr { background: var(--surface2); }
+.data-table th {
+  padding: 12px 16px; text-align: left; font-size: 12px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em;
+}
+.data-table td { padding: 12px 16px; font-size: 13px; border-top: 1px solid var(--border); }
+.data-table tbody tr:hover { background: rgba(255,255,255,.025); }
+.badge {
+  display: inline-block; padding: 3px 10px; border-radius: 6px;
+  font-size: 11px; font-weight: 600;
+}
+.badge.answer { background: rgba(34,197,94,.12); color: var(--green); }
+.badge.noanswer { background: rgba(245,158,11,.12); color: var(--orange); }
+.badge.busy { background: rgba(59,130,246,.12); color: var(--blue); }
+.badge.failed { background: rgba(239,68,68,.12); color: var(--red); }
+.badge.gray { background: rgba(255,255,255,.07); color: var(--text-muted); }
+
+.empty-state {
+  text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px;
+}
+
+/* ─── STATS ──────────────────────────────────────────────────────────── */
+.charts-row { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-bottom: 20px; }
+.chart-card { background: var(--surface); border-radius: var(--radius); padding: 20px; }
+.chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 16px; }
+.chart-wrap { position: relative; height: 240px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+/* ─── CONFIG ──────────────────────────────────────────────────────────── */
+.config-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; }
+.config-card { background: var(--surface); border-radius: var(--radius); padding: 24px; }
+.config-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 20px; }
+.config-field { margin-bottom: 16px; }
+.config-field label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.config-field input {
+  width: 100%; background: var(--surface3); border: 1.5px solid transparent;
+  border-radius: var(--radius-sm); padding: 9px 13px; color: var(--text);
+  font-size: 13px; outline: none; transition: border-color .2s;
+}
+.config-field input:focus { border-color: var(--primary); }
+.btn-save {
+  padding: 10px 24px; background: var(--primary); color: white; border: none;
+  border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: opacity .2s; margin-top: 8px;
+}
+.btn-save:hover { opacity: .9; }
+.btn-save:disabled { opacity: .5; cursor: not-allowed; }
+.msg { padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 12px; display: none; }
+.msg.ok { background: rgba(34,197,94,.1); color: var(--green); }
+.msg.err { background: rgba(239,68,68,.1); color: var(--red); }
+
+.action-list { display: flex; flex-direction: column; gap: 10px; }
+.action-btn {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  background: var(--surface); border-radius: 12px; border: 1px solid var(--border);
+  cursor: pointer; transition: border-color .2s; text-align: left;
+  color: var(--text); font-size: 13px;
+}
+.action-btn:hover { border-color: var(--primary); }
+.action-btn .action-icon {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.action-btn svg { width: 18px; height: 18px; }
+
+/* ─── RECENT CALLS ───────────────────────────────────────────────────── */
+.recent-list { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+.recent-row {
+  display: flex; align-items: center; gap: 14px; padding: 13px 20px;
+  border-top: 1px solid var(--border); font-size: 13px;
+}
+.recent-row:first-child { border-top: none; }
+.recent-phone { flex: 1; font-weight: 500; }
+.recent-time { color: var(--text-muted); font-size: 12px; }
+
+/* ─── SCROLLBAR ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ─── LOGS ───────────────────────────────────────────────────────────── */
+.log-box {
+  background: #0a0c12; border-radius: var(--radius); padding: 16px 20px;
+  font-family: 'Consolas', monospace; font-size: 12px; line-height: 1.7;
+  height: calc(100vh - 180px); overflow-y: auto; color: #a0aab8;
+}
+.log-line.err { color: var(--red); }
+.log-line.warn { color: var(--orange); }
+.log-line.info { color: #7dd3fc; }
+
+/* spinner */
+.spinner {
+  width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.2);
+  border-top-color: white; border-radius: 50%;
+  animation: spin .7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- ═══ LOGIN ════════════════════════════════════════════════════════════ -->
+<div id="login-page">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+    </div>
+    <h1>AutoDialer Pro</h1>
+    <p>Boshqaruv paneliga ulanish</p>
+    <div class="error-box" id="login-error"></div>
+    <div class="field">
+      <label>API Server URL</label>
+      <input type="url" id="api-url" value="http://localhost:8585" placeholder="http://server-ip:8585">
+    </div>
+    <div class="field">
+      <label>API Kalit</label>
+      <input type="password" id="api-key" placeholder="Maxfiy kalit">
+    </div>
+    <button class="btn-primary" id="btn-connect" onclick="doLogin()">Ulanish</button>
+  </div>
+</div>
+
+<!-- ═══ MAIN ══════════════════════════════════════════════════════════════ -->
+<div id="main-page">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">
+        <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+      </div>
+      <div><div class="name">AutoDialer</div><div class="sub">Pro</div></div>
+    </div>
+
+    <div class="nav-item active" data-tab="dashboard" onclick="switchTab(this)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+      Dashboard
+    </div>
+    <div class="nav-item" data-tab="calls" onclick="switchTab(this)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+      Qo'ng'iroqlar
+    </div>
+    <div class="nav-item" data-tab="stats" onclick="switchTab(this)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5V9.2zm5.6-4.2h2.8v14h-2.8V5zM16 13h3v6h-3v-6z"/></svg>
+      Statistika
+    </div>
+    <div class="nav-item" data-tab="logs" onclick="switchTab(this)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+      Loglar
+    </div>
+    <div class="nav-item" data-tab="config" onclick="switchTab(this)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      Sozlamalar
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="server-pill">
+        <div class="dot"></div>
+        <span id="server-label">localhost:8585</span>
+      </div>
+      <button class="btn-logout" onclick="doLogout()">Chiqish</button>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <div class="content">
+    <div class="topbar">
+      <div class="topbar-left" id="topbar-time"></div>
+      <div class="indicator"><div class="dot" id="dot-asterisk"></div><span>Asterisk</span></div>
+      <div class="indicator"><div class="dot" id="dot-sip"></div><span>SIP</span></div>
+      <div class="indicator"><div class="dot" id="dot-dialer"></div><span>AutoDialer</span></div>
+      <button class="btn-icon" onclick="refreshAll()" title="Yangilash">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      </button>
+    </div>
+
+    <!-- DASHBOARD TAB -->
+    <div class="tab-content active" id="tab-dashboard">
+      <div class="section-title">Bugungi ko'rsatkichlar</div>
+      <div class="cards-grid">
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(108,99,255,.15)">
+            <svg viewBox="0 0 24 24" fill="#6c63ff"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+          </div>
+          <div>
+            <div class="stat-label">Jami qo'ng'iroqlar</div>
+            <div class="stat-value" id="s-total">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(34,197,94,.15)">
+            <svg viewBox="0 0 24 24" fill="#22c55e"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.12-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
+          </div>
+          <div>
+            <div class="stat-label">Javob berilgan</div>
+            <div class="stat-value" id="s-answered" style="color:var(--green)">—</div>
+            <div class="stat-sub" id="s-pct">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(245,158,11,.15)">
+            <svg viewBox="0 0 24 24" fill="#f59e0b"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.3 1l-2.2 2.2z"/><line x1="3" y1="3" x2="21" y2="21" stroke="#f59e0b" stroke-width="2"/></svg>
+          </div>
+          <div>
+            <div class="stat-label">Javobsiz</div>
+            <div class="stat-value" id="s-noanswer" style="color:var(--orange)">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(59,130,246,.15)">
+            <svg viewBox="0 0 24 24" fill="#3b82f6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          </div>
+          <div>
+            <div class="stat-label">Band / Xato</div>
+            <div class="stat-value" id="s-busy" style="color:var(--blue)">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">Tizim holati</div>
+      <div class="status-grid">
+        <div class="status-tile" id="tile-asterisk">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.5 16h-3c-1.9 0-3.5-1.6-3.5-3.5S4.6 9 6.5 9H7V7h-.5C3.5 7 1 9.5 1 12.5S3.5 18 6.5 18h3v-2zm4.5 2h3c3 0 5.5-2.5 5.5-5.5S20.5 7 17.5 7H17V9h.5c1.9 0 3.5 1.6 3.5 3.5S19.4 16 17.5 16h-3v2zM8 13h8v-2H8v2z"/></svg>
+          <div><div class="label">Asterisk AMI</div><div class="val" id="val-asterisk">—</div></div>
+        </div>
+        <div class="status-tile" id="tile-sip">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
+          <div><div class="label">SIP Trunk</div><div class="val" id="val-sip">—</div></div>
+        </div>
+        <div class="status-tile" id="tile-dialer">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <div><div class="label">AutoDialer</div><div class="val" id="val-dialer">—</div></div>
+        </div>
+      </div>
+
+      <div class="section-title">So'nggi qo'ng'iroqlar</div>
+      <div class="recent-list" id="recent-list">
+        <div class="empty-state">Yuklanmoqda...</div>
+      </div>
+    </div>
+
+    <!-- CALLS TAB -->
+    <div class="tab-content" id="tab-calls">
+      <div class="section-title">Qo'ng'iroqlar ro'yxati</div>
+      <div class="table-card">
+        <div class="table-toolbar">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input type="text" placeholder="Telefon yoki buyurtma ID..." id="call-search" oninput="filterCalls()">
+          </div>
+          <div class="filter-chips">
+            <div class="chip active" data-f="ALL" onclick="setFilter(this)">Barchasi</div>
+            <div class="chip" data-f="ANSWER" onclick="setFilter(this)">Javob</div>
+            <div class="chip" data-f="NOANSWER" onclick="setFilter(this)">Javobsiz</div>
+            <div class="chip" data-f="BUSY" onclick="setFilter(this)">Band</div>
+            <div class="chip" data-f="FAILED" onclick="setFilter(this)">Xato</div>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Telefon</th>
+                <th>Holat</th>
+                <th>Urinish</th>
+                <th>Kutish</th>
+                <th>Davomiylik</th>
+                <th>Vaqt</th>
+                <th>Yozuv</th>
+              </tr>
+            </thead>
+            <tbody id="calls-tbody"></tbody>
+          </table>
+        </div>
+        <div id="calls-empty" class="empty-state" style="display:none">Qo'ng'iroq topilmadi</div>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-muted)" id="calls-count"></div>
+    </div>
+
+    <!-- STATS TAB -->
+    <div class="tab-content" id="tab-stats">
+      <div class="section-title">Statistika</div>
+      <div class="charts-row">
+        <div class="chart-card">
+          <h3>Bugun</h3>
+          <div class="chart-wrap"><canvas id="pie-chart"></canvas></div>
+          <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Javob</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Javobsiz</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>Band</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Xato</div>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>14 kunlik tarix</h3>
+          <div class="chart-wrap"><canvas id="bar-chart"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h3>Haftalik jadval</h3>
+        <div style="overflow-x:auto">
+          <table class="data-table" id="week-table">
+            <thead><tr>
+              <th>Sana</th><th>Jami</th><th>Javob</th>
+              <th>Javobsiz</th><th>Band</th><th>Xato</th><th>%</th>
+            </tr></thead>
+            <tbody id="week-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS TAB -->
+    <div class="tab-content" id="tab-logs">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <div class="section-title" style="margin:0">Tizim loglari</div>
+        <button class="btn-save" style="padding:8px 16px;font-size:13px" onclick="loadLogs()">Yangilash</button>
+        <button class="btn-save" style="padding:8px 16px;font-size:13px;background:var(--surface3);color:var(--text)" onclick="clearLogs()">Tozalash</button>
+      </div>
+      <div class="log-box" id="log-box"></div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div class="tab-content" id="tab-config">
+      <div class="section-title">Sozlamalar</div>
+      <div class="config-layout">
+        <div class="config-card">
+          <h3>Asosiy parametrlar</h3>
+          <div id="config-fields"></div>
+          <div class="msg" id="cfg-msg"></div>
+          <button class="btn-save" id="btn-save-cfg" onclick="saveConfig()">Saqlash</button>
+        </div>
+        <div>
+          <div class="config-card" style="margin-bottom:16px">
+            <h3>Tezkor harakatlar</h3>
+            <div class="action-list">
+              <button class="action-btn" onclick="triggerCheck()">
+                <div class="action-icon" style="background:rgba(34,197,94,.12)">
+                  <svg viewBox="0 0 24 24" fill="#22c55e"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+                <span>Tekshirishni boshlash</span>
+              </button>
+              <button class="action-btn" onclick="refreshAll()">
+                <div class="action-icon" style="background:rgba(59,130,246,.12)">
+                  <svg viewBox="0 0 24 24" fill="#3b82f6"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                </div>
+                <span>Ma'lumotlarni yangilash</span>
+              </button>
+            </div>
+          </div>
+          <div class="config-card">
+            <h3>Ulanish</h3>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.7">
+              <div>Server: <span id="cfg-server" style="color:var(--text)"></span></div>
+              <div style="margin-top:4px">
+                <a href="#" onclick="doLogout();return false" style="color:var(--red);text-decoration:none">Boshqa serverga ulanish</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let API = '', KEY = '', allCalls = [], activeFilter = 'ALL';
+let pieChart = null, barChart = null;
+
+const CONFIG_FIELDS = [
+  { key: 'WAIT_BEFORE_CALL',    label: "Qo'ng'iroqdan oldin kutish (s)" },
+  { key: 'TELEGRAM_ALERT_TIME', label: 'Telegram xabar vaqti (s)' },
+  { key: 'MAX_CALL_ATTEMPTS',   label: 'Maksimal urinish soni' },
+  { key: 'RETRY_INTERVAL',      label: 'Urinishlar orasidagi interval (s)' },
+  { key: 'NONBOR_BASE_URL',     label: 'Nonbor API URL' },
+  { key: 'AMI_HOST',            label: 'Asterisk AMI host' },
+  { key: 'AMI_PORT',            label: 'AMI port' },
+];
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+window.onload = () => {
+  const saved = JSON.parse(localStorage.getItem('adp_conn') || '{}');
+  if (saved.api && saved.key) {
+    document.getElementById('api-url').value = saved.api;
+    document.getElementById('api-key').value = saved.key;
+    API = saved.api; KEY = saved.key;
+    verifyAndEnter();
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+};
+
+document.getElementById('api-key').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+async function doLogin() {
+  const btn = document.getElementById('btn-connect');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  API = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+  KEY = document.getElementById('api-key').value.trim();
+
+  const err = document.getElementById('login-error');
+  err.style.display = 'none';
+
+  try {
+    const r = await fetch(API + '/api/autodialer/health');
+    if (!r.ok && r.status !== 200) throw new Error('Server javob bermadi');
+    const r2 = await apiFetch('/api/autodialer/stats');
+    if (!r2) throw new Error("API kalit noto'g'ri");
+    localStorage.setItem('adp_conn', JSON.stringify({ api: API, key: KEY }));
+    enterDashboard();
+  } catch (e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Ulanish';
+  }
+}
+
+async function verifyAndEnter() {
+  try {
+    const r = await apiFetch('/api/autodialer/stats');
+    if (r) { enterDashboard(); return; }
+  } catch (_) {}
+  API = ''; KEY = '';
+}
+
+function enterDashboard() {
+  document.getElementById('login-page').style.display = 'none';
+  document.getElementById('main-page').style.display = 'flex';
+  document.getElementById('server-label').textContent = API.replace('http://', '').replace('https://', '');
+  document.getElementById('cfg-server').textContent = API;
+  refreshAll();
+  setInterval(refreshAll, 20000);
+}
+
+function doLogout() {
+  localStorage.removeItem('adp_conn');
+  API = ''; KEY = '';
+  document.getElementById('main-page').style.display = 'none';
+  document.getElementById('login-page').style.display = 'flex';
+  document.getElementById('api-key').value = '';
+  document.getElementById('btn-connect').textContent = 'Ulanish';
+  document.getElementById('btn-connect').disabled = false;
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+async function apiFetch(path, options = {}) {
+  const res = await fetch(API + path, {
+    headers: { 'X-API-Key': KEY, 'Content-Type': 'application/json', ...options.headers },
+    ...options
+  });
+  if (res.status === 401) return null;
+  return res.json();
+}
+
+// ─── REFRESH ──────────────────────────────────────────────────────────────────
+async function refreshAll() {
+  await Promise.all([loadStatus(), loadStats(), loadCalls()]);
+}
+
+async function loadStatus() {
+  try {
+    const d = await apiFetch('/api/autodialer/service/status');
+    if (!d) return;
+    const ast = d.asterisk_connected ?? false;
+    const sip = d.sip_registered ?? false;
+    const run = d.autodialer_running ?? false;
+
+    setDot('dot-asterisk', ast);
+    setDot('dot-sip', sip);
+    setDot('dot-dialer', run);
+
+    setTile('tile-asterisk', 'val-asterisk', ast, 'Ulangan', 'Ulanmagan');
+    setTile('tile-sip',      'val-sip',      sip, "Ro'yxatdan o'tgan", "Ro'yxatdan o'tmagan");
+    setTile('tile-dialer',   'val-dialer',   run, 'Ishlayapti', "To'xtagan");
+  } catch (_) {}
+}
+
+function setDot(id, on) {
+  const el = document.getElementById(id);
+  el.className = 'dot' + (on ? ' on' : '');
+}
+function setTile(tileId, valId, ok, okLabel, errLabel) {
+  const tile = document.getElementById(tileId);
+  const val  = document.getElementById(valId);
+  tile.className = 'status-tile ' + (ok ? 'ok' : 'err');
+  val.textContent = ok ? okLabel : errLabel;
+  val.style.color = ok ? 'var(--green)' : 'var(--red)';
+  tile.querySelector('svg').style.color = ok ? 'var(--green)' : 'var(--red)';
+}
+
+async function loadStats() {
+  try {
+    const d = await apiFetch('/api/autodialer/stats');
+    if (!d) return;
+    const t = d.today || {};
+    const total    = t.total    || 0;
+    const answered = t.answered || 0;
+    const noAnswer = t.no_answer || 0;
+    const busy     = (t.busy || 0) + (t.failed || 0);
+
+    document.getElementById('s-total').textContent    = total;
+    document.getElementById('s-answered').textContent = answered;
+    document.getElementById('s-noanswer').textContent = noAnswer;
+    document.getElementById('s-busy').textContent     = busy;
+    document.getElementById('s-pct').textContent = total > 0 ? Math.round(answered*100/total)+'%' : '0%';
+
+    buildPieChart(t);
+    buildBarChart(d.history || []);
+    buildWeekTable(d.history || []);
+  } catch (_) {}
+}
+
+async function loadCalls() {
+  try {
+    const d = await apiFetch('/api/autodialer/calls');
+    if (!d) return;
+    allCalls = d.calls || [];
+    renderCalls();
+    renderRecent(allCalls.slice(-10).reverse());
+  } catch (_) {}
+}
+
+// ─── CALLS TABLE ──────────────────────────────────────────────────────────────
+function filterCalls() { renderCalls(); }
+function setFilter(chip) {
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  activeFilter = chip.dataset.f;
+  renderCalls();
+}
+
+function renderCalls() {
+  const search = document.getElementById('call-search').value.toLowerCase();
+  const filtered = allCalls.filter(c => {
+    const ds = (c.dial_status || '').toUpperCase();
+    const normDs = ds === 'NO ANSWER' ? 'NOANSWER' : ds;
+    const matchF = activeFilter === 'ALL' || normDs === activeFilter;
+    const matchS = !search || (c.phone||'').includes(search) || (c.order_id||'').toString().includes(search);
+    return matchF && matchS;
+  });
+
+  const tbody = document.getElementById('calls-tbody');
+  const empty = document.getElementById('calls-empty');
+  const count = document.getElementById('calls-count');
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    count.textContent = '';
+    return;
+  }
+  empty.style.display = 'none';
+  count.textContent = filtered.length + ' ta natija';
+
+  tbody.innerHTML = filtered.slice().reverse().map(c => {
+    const ds = c.dial_status || c.status || '';
+    const cls = statusClass(ds);
+    const wait = c.wait_seconds != null ? c.wait_seconds + 's' : '—';
+    const dur  = c.duration_seconds != null ? c.duration_seconds + 's' : '—';
+    const time = (c.timestamp || '').length > 18 ? c.timestamp.substring(11,19) : (c.timestamp || '—');
+    const rec  = c.recording_file
+      ? `<a href="${API}/api/autodialer/recordings/${encodeURIComponent(c.recording_file)}" target="_blank" title="Tinglash" style="color:var(--primary)">
+           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle">
+             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+           </svg>
+         </a>` : '<span style="color:var(--text-muted)">—</span>';
+    return `<tr>
+      <td style="font-weight:500">${esc(c.phone)}</td>
+      <td><span class="badge ${cls}">${esc(ds)}</span></td>
+      <td>${c.attempt||1}</td>
+      <td>${wait}</td>
+      <td>${dur}</td>
+      <td style="color:var(--text-muted);font-size:12px">${time}</td>
+      <td>${rec}</td>
+    </tr>`;
+  }).join('');
+}
+
+function statusClass(ds) {
+  ds = (ds||'').toUpperCase();
+  if (ds === 'ANSWER') return 'answer';
+  if (ds === 'NO ANSWER' || ds === 'NOANSWER') return 'noanswer';
+  if (ds === 'BUSY') return 'busy';
+  if (ds === 'FAILED') return 'failed';
+  return 'gray';
+}
+
+function renderRecent(calls) {
+  const el = document.getElementById('recent-list');
+  if (calls.length === 0) {
+    el.innerHTML = '<div class="empty-state">Bugun qo\'ng\'iroq yo\'q</div>';
+    return;
+  }
+  el.innerHTML = calls.map(c => {
+    const ds = c.dial_status || '';
+    const cls = statusClass(ds);
+    const time = (c.timestamp||'').length > 18 ? c.timestamp.substring(11,16) : (c.timestamp||'');
+    return `<div class="recent-row">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="badge-dot">
+        <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+      </svg>
+      <div class="recent-phone">${esc(c.phone)}</div>
+      <span class="badge ${cls}">${esc(ds)}</span>
+      <div class="recent-time">${time}</div>
+    </div>`;
+  }).join('');
+}
+
+// ─── CHARTS ───────────────────────────────────────────────────────────────────
+function buildPieChart(t) {
+  const data = [t.answered||0, t.no_answer||0, t.busy||0, t.failed||0];
+  const ctx = document.getElementById('pie-chart').getContext('2d');
+  if (pieChart) pieChart.destroy();
+  pieChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Javob', 'Javobsiz', 'Band', 'Xato'],
+      datasets: [{
+        data, backgroundColor: ['#22c55e','#f59e0b','#3b82f6','#ef4444'],
+        borderWidth: 0, hoverOffset: 6
+      }]
+    },
+    options: {
+      cutout: '65%', plugins: { legend: { display: false } },
+      animation: { animateScale: true }
+    }
+  });
+}
+
+function buildBarChart(history) {
+  const recent = history.slice(-14);
+  const ctx = document.getElementById('bar-chart').getContext('2d');
+  if (barChart) barChart.destroy();
+  barChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: recent.map(d => (d.date||'').slice(5)),
+      datasets: [
+        { label: 'Javob', data: recent.map(d=>d.answered||0), backgroundColor: '#22c55e', borderRadius: 4 },
+        { label: 'Javobsiz', data: recent.map(d=>d.no_answer||0), backgroundColor: 'rgba(245,158,11,.6)', borderRadius: 4 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b8fa8', boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b8fa8', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } },
+        y: { ticks: { color: '#8b8fa8', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } }
+      }
+    }
+  });
+}
+
+function buildWeekTable(history) {
+  const recent = history.slice(-7).reverse();
+  document.getElementById('week-tbody').innerHTML = recent.map(d => {
+    const total = d.total||0, ans = d.answered||0;
+    const pct = total > 0 ? Math.round(ans*100/total)+'%' : '0%';
+    return `<tr>
+      <td>${d.date||''}</td>
+      <td>${total}</td>
+      <td style="color:var(--green)">${ans}</td>
+      <td style="color:var(--orange)">${d.no_answer||0}</td>
+      <td style="color:var(--blue)">${d.busy||0}</td>
+      <td style="color:var(--red)">${d.failed||0}</td>
+      <td style="color:var(--text-muted)">${pct}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── LOGS ─────────────────────────────────────────────────────────────────────
+async function loadLogs() {
+  try {
+    const d = await apiFetch('/api/autodialer/logs?lines=200');
+    const box = document.getElementById('log-box');
+    if (!d || !d.logs) { box.textContent = "Log ma'lumot yo'q"; return; }
+    box.innerHTML = d.logs.map(line => {
+      let cls = '';
+      if (/error|traceback|exception/i.test(line)) cls = 'err';
+      else if (/warning|warn/i.test(line)) cls = 'warn';
+      else if (/info/i.test(line)) cls = 'info';
+      return `<div class="log-line ${cls}">${esc(line)}</div>`;
+    }).join('');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    document.getElementById('log-box').textContent = 'Log yuklanmadi: ' + e.message;
+  }
+}
+
+function clearLogs() {
+  document.getElementById('log-box').innerHTML = '';
+}
+
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+async function loadConfig() {
+  const d = await apiFetch('/api/autodialer/config');
+  if (!d) return;
+  const container = document.getElementById('config-fields');
+  container.innerHTML = CONFIG_FIELDS.map(f =>
+    `<div class="config-field">
+       <label>${f.label}</label>
+       <input type="text" id="cfg_${f.key}" value="${esc(d[f.key]||'')}">
+     </div>`
+  ).join('');
+}
+
+async function saveConfig() {
+  const btn = document.getElementById('btn-save-cfg');
+  const msg = document.getElementById('cfg-msg');
+  btn.disabled = true;
+
+  const body = {};
+  CONFIG_FIELDS.forEach(f => {
+    const el = document.getElementById('cfg_' + f.key);
+    if (el) body[f.key] = el.value.trim();
+  });
+
+  try {
+    const d = await apiFetch('/api/autodialer/config/update', {
+      method: 'POST', body: JSON.stringify(body)
+    });
+    msg.textContent = d?.success ? '✓ Sozlamalar saqlandi' : (d?.message || 'Xatolik');
+    msg.className = 'msg ' + (d?.success ? 'ok' : 'err');
+    msg.style.display = 'block';
+    setTimeout(() => msg.style.display = 'none', 3000);
+  } catch (e) {
+    msg.textContent = '✗ ' + e.message;
+    msg.className = 'msg err';
+    msg.style.display = 'block';
+  }
+  btn.disabled = false;
+}
+
+async function triggerCheck() {
+  try {
+    await apiFetch('/api/autodialer/service/start', { method: 'POST' });
+    await refreshAll();
+  } catch (_) {}
+}
+
+// ─── NAV ──────────────────────────────────────────────────────────────────────
+function switchTab(navItem) {
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  navItem.classList.add('active');
+  const tab = navItem.dataset.tab;
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'logs') loadLogs();
+  if (tab === 'config') loadConfig();
+}
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function updateClock() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const months = ['Yanvar','Fevral','Mart','Aprel','May','Iyun','Iyul','Avgust','Sentabr','Oktabr','Noyabr','Dekabr'];
+  document.getElementById('topbar-time').textContent =
+    `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}, ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+</script>
+</body>
+</html>

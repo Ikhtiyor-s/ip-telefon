@@ -70,10 +70,12 @@ class AutodialerAPI:
         if request.method == "OPTIONS":
             resp = web.Response()
         else:
-            # Health + bot webhook — ochiq (o'z auth logikasi bor)
+            # Health + bot webhook + web panel — ochiq (o'z auth logikasi bor)
             if (request.path == "/api/autodialer/health"
                     or request.path.startswith("/api/autodialer/audio/")
-                    or request.path == "/notify"):
+                    or request.path == "/notify"
+                    or request.path == "/"
+                    or request.path.startswith("/static/")):
                 try:
                     resp = await handler(request)
                 except web.HTTPException as ex:
@@ -151,11 +153,18 @@ class AutodialerAPI:
         r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
         # Telegram bot webhook — API ishlamasa darhol admin chaqirish
         r.add_post("/notify", self.handle_bot_notify)
+        # Web panel (static)
+        r.add_get("/", self._serve_index)
+        r.add_static("/static", PROJECT_ROOT / "static", show_index=False)
         # OPTIONS preflight uchun
         r.add_route("OPTIONS", "/{path:.*}", self._options_handler)
 
     async def _options_handler(self, request):
         return web.Response()
+
+    async def _serve_index(self, request):
+        index = PROJECT_ROOT / "static" / "index.html"
+        return web.FileResponse(index)
 
     # ===== HELPERS =====
 
@@ -870,8 +879,18 @@ class AutodialerAPI:
         # Systemd orqali tekshirish (Linux da)
         pid = os.getpid()
 
+        asterisk_connected = False
+        sip_registered = False
+        if ad and hasattr(ad, 'ami') and ad.ami:
+            asterisk_connected = ad.ami.connected if hasattr(ad.ami, 'connected') else False
+        if ad and hasattr(ad, 'ami') and ad.ami:
+            sip_registered = getattr(ad.ami, 'sip_registered', False)
+
         return self._ok({
             "status": status,
+            "autodialer_running": status == "running",
+            "asterisk_connected": asterisk_connected,
+            "sip_registered": sip_registered,
             "pid": pid,
             "uptime": uptime,
             "skip_asterisk": ad.skip_asterisk if ad else False,
