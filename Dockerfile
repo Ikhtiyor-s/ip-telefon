@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code
 COPY src/ ./src/
 COPY config/ ./config/
+COPY static/ ./static/
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 # Create directories va ruxsatlar

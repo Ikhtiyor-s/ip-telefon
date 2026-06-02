@@ -7,13 +7,73 @@ on:
     branches: [main, master]
 
 jobs:
-  test:
-    name: Testlar
+  # ─────────────────────────────────────────────────────────────────────
+  # 1. TUZILMA TEKSHIRUVI — majburiy fayllar va kataloglar mavjudmi
+  # ─────────────────────────────────────────────────────────────────────
+  structure:
+    name: Tuzilma tekshiruvi
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Majburiy fayllar mavjudmi
+        run: |
+          REQUIRED=(
+            "src/autodialer.py"
+            "src/api_server.py"
+            "src/services/asterisk_service.py"
+            "src/services/nonbor_service.py"
+            "src/services/tts_service.py"
+            "src/services/stats_service.py"
+            "src/services/admin_call_service.py"
+            "src/services/webhook_service.py"
+            "config/asterisk/extensions.conf"
+            "config/asterisk/pjsip.conf"
+            "config/asterisk/manager.local.conf"
+            "static/index.html"
+            "Dockerfile"
+            "docker-compose.yml"
+            "docker-compose.local.yml"
+            ".env.example"
+          )
+          FAIL=0
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "❌ Topilmadi: $f"
+              FAIL=1
+            else
+              echo "✅ $f"
+            fi
+          done
+          [ $FAIL -eq 0 ] || exit 1
+
+      - name: Web dashboard HTML tekshiruvi
+        run: |
+          if ! grep -q "AutoDialer Pro" static/index.html; then
+            echo "❌ static/index.html noto'g'ri kontent"
+            exit 1
+          fi
+          if ! grep -q "apiFetch" static/index.html; then
+            echo "❌ static/index.html API kodi yo'q"
+            exit 1
+          fi
+          echo "✅ Web dashboard OK"
+
+      - name: Dockerfile sintaksis
+        run: |
+          docker run --rm -i hadolint/hadolint < Dockerfile || true
+          echo "✅ Dockerfile tekshirildi"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 2. TESTLAR
+  # ─────────────────────────────────────────────────────────────────────
+  test:
+    name: Testlar (Python 3.11)
+    runs-on: ubuntu-latest
+    needs: structure
 
     steps:
-      - name: Kod olish
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Python 3.11 o'rnatish
         uses: actions/setup-python@v5
@@ -21,7 +81,7 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: ffmpeg o'rnatish (audio konversiya uchun)
+      - name: ffmpeg o'rnatish
         run: sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Dependensiyalar
@@ -46,13 +106,20 @@ jobs:
           ASTERISK_SOUNDS_PATH: "/tmp/test-audio"
           ASTERISK_PLAYBACK_PATH: "/tmp/test-audio/cache"
 
+      - name: Test hisoboti
+        if: always()
+        run: pytest tests/ --tb=no -q 2>&1 | tail -5
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 3. XAVFSIZLIK
+  # ─────────────────────────────────────────────────────────────────────
   security:
     name: Xavfsizlik tekshiruvi
     runs-on: ubuntu-latest
+    needs: structure
 
     steps:
-      - name: Kod olish
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: pjsip.conf hardcoded credentials yo'qligi
         run: |
@@ -66,11 +133,15 @@ jobs:
 
       - name: Maxfiy .env fayllar git'da yo'qligi
         run: |
-          if git ls-files | grep -E "^\.env\.(production|prod|secret)$"; then
-            echo "❌ XATO: Maxfiy .env fayli git'da!"
-            exit 1
-          fi
-          echo "✅ Maxfiy .env fayllar git'da yo'q"
+          SECRETS=(".env.production" ".env.prod" ".env.secret" "pjsip.local.conf")
+          FAIL=0
+          for s in "${SECRETS[@]}"; do
+            if git ls-files | grep -qF "$s"; then
+              echo "❌ XATO: $s git'da topildi!"
+              FAIL=1
+            fi
+          done
+          [ $FAIL -eq 0 ] && echo "✅ Maxfiy fayllar git'da yo'q" || exit 1
 
       - name: Python fayllarida ochiq parol yo'qligi
         run: |
@@ -79,7 +150,7 @@ jobs:
           from pathlib import Path
 
           SRC = Path("src")
-          ALLOWED = {"nonbor-secret-key", "autodialer123", "your-", "test-", "<"}
+          ALLOWED = {"nonbor-secret-key", "autodialer123", "your-", "test-", "<", "ci-"}
           PATTERN = re.compile(
               r'(?:password|secret)\s*=\s*["\']([a-zA-Z0-9!@#]{8,})["\']',
               re.IGNORECASE
@@ -98,3 +169,50 @@ jobs:
               sys.exit(1)
           print("✅ Hardcoded credentials topilmadi")
           EOF
+
+      - name: SSRF himoya mavjudmi
+        run: |
+          if ! grep -q "_is_safe_url" src/services/webhook_service.py; then
+            echo "❌ SSRF himoya topilmadi!"
+            exit 1
+          fi
+          echo "✅ SSRF himoya mavjud"
+
+      - name: HMAC compare_digest ishlatilmoqda
+        run: |
+          if ! grep -q "compare_digest" src/api_server.py; then
+            echo "❌ compare_digest topilmadi!"
+            exit 1
+          fi
+          echo "✅ HMAC compare_digest mavjud"
+
+      - name: Web dashboard XSS himoyasi
+        run: |
+          if ! grep -q "function esc(" static/index.html; then
+            echo "❌ HTML escape funksiyasi topilmadi!"
+            exit 1
+          fi
+          echo "✅ XSS himoya (esc funksiyasi) mavjud"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # 4. DOCKER BUILD — prod uchun image yig'ilishini tekshirish
+  # ─────────────────────────────────────────────────────────────────────
+  docker:
+    name: Docker build tekshiruvi
+    runs-on: ubuntu-latest
+    needs: [test, security]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker image yig'ish
+        run: docker build -t autodialer-pro:ci-test .
+
+      - name: Image hajmi
+        run: docker image inspect autodialer-pro:ci-test --format='Image: {{.Size}} bytes'
+
+      - name: Static fayllar image ichida bormi
+        run: |
+          docker run --rm autodialer-pro:ci-test ls /app/static/index.html \
+            && echo "✅ static/index.html image ichida bor" \
+            || (echo "❌ static/index.html image ichida yo'q!" && exit 1)

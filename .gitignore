@@ -16,3 +16,6 @@ nul
 audio/cache/
 docker-compose.override.yml
 config/asterisk/pjsip.local.conf
+run_dev.py
+dev_server.log
+dev_server_err.log
