@@ -6,9 +6,9 @@ services:
     networks:
       - autodialer-net
     ports:
-      - "5060:5060/udp"
+      - "5061:5060/udp"
       - "5060:5060/tcp"
-      - "5038:5038"
+      - "5039:5038"
       - "10000-10100:10000-10100/udp"
     volumes:
       - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
