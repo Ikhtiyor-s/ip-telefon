@@ -70,10 +70,11 @@ class AutodialerAPI:
         if request.method == "OPTIONS":
             resp = web.Response()
         else:
-            # Health + bot webhook + web panel — ochiq (o'z auth logikasi bor)
+            # Health + bot webhook + web panel + kiruvchi webhook — ochiq (o'z auth logikasi bor)
             if (request.path == "/api/autodialer/health"
                     or request.path.startswith("/api/autodialer/audio/")
                     or request.path == "/notify"
+                    or request.path.startswith("/webhook/")
                     or request.path == "/"
                     or request.path.startswith("/static/")):
                 try:
@@ -153,6 +154,9 @@ class AutodialerAPI:
         r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
         # Telegram bot webhook — API ishlamasa darhol admin chaqirish
         r.add_post("/notify", self.handle_bot_notify)
+        # Kiruvchi webhook — tashqi servislardan ma'lumot qabul qilish
+        r.add_post("/webhook/inbound", self.handle_inbound_webhook)
+        r.add_get("/webhook/inbound/ping", self.inbound_webhook_ping)
         # Web panel (static)
         r.add_get("/", self._serve_index)
         r.add_static("/static", PROJECT_ROOT / "static", show_index=False)
@@ -1329,6 +1333,277 @@ class AutodialerAPI:
         # Boshqa eventlar uchun
         logger.info(f"Bot notify: noma'lum event '{event}' — o'tkazib yuborildi")
         return self._json({"ok": True, "event": event, "action": "ignored"})
+
+    # ===== KIRUVCHI WEBHOOK =====
+
+    def _verify_inbound_secret(self, request) -> bool:
+        """
+        Kiruvchi webhook autentifikatsiya.
+        Header: X-Webhook-Secret: <INBOUND_WEBHOOK_SECRET>
+        Yoki HMAC: X-Webhook-Signature: sha256=<hmac>
+        """
+        secret = os.getenv("INBOUND_WEBHOOK_SECRET", "")
+        if not secret:
+            logger.warning("INBOUND_WEBHOOK_SECRET sozlanmagan — webhook rad etildi")
+            return False
+
+        # HMAC imzo tekshirish (ustunlik beradi)
+        sig_header = request.headers.get("X-Webhook-Signature", "")
+        if sig_header.startswith("sha256="):
+            return True  # body kerak — _verify_hmac_body da tekshiriladi
+
+        # Oddiy secret key
+        incoming = request.headers.get("X-Webhook-Secret", "")
+        return hmac.compare_digest(incoming, secret)
+
+    async def _verify_hmac_body(self, body: bytes, sig_header: str) -> bool:
+        """HMAC-SHA256 imzoni tekshirish"""
+        secret = os.getenv("INBOUND_WEBHOOK_SECRET", "").encode()
+        expected = "sha256=" + hmac.new(secret, body, "sha256").hexdigest()
+        return hmac.compare_digest(sig_header, expected)
+
+    async def inbound_webhook_ping(self, request):
+        """GET /webhook/inbound/ping — endpoint mavjudligini tekshirish"""
+        configured = bool(os.getenv("INBOUND_WEBHOOK_SECRET", ""))
+        return self._json({
+            "ok": True,
+            "endpoint": "/webhook/inbound",
+            "configured": configured,
+            "supported_events": ["new_order", "call_now", "order_update"],
+        })
+
+    async def handle_inbound_webhook(self, request):
+        """
+        POST /webhook/inbound — Tashqi servislardan ma'lumot qabul qilish.
+
+        Auth (birini tanlang):
+          Header: X-Webhook-Secret: <INBOUND_WEBHOOK_SECRET>
+          Header: X-Webhook-Signature: sha256=<hmac_sha256_of_body>
+
+        Qo'llab-quvvatlanadigan eventlar:
+
+        1. new_order — Yangi buyurtma, biznesga darhol qo'ng'iroq
+           {
+             "event": "new_order",
+             "business_id": 123,
+             "phone": "+998901234567",   # ixtiyoriy (yo'q bo'lsa API dan olinadi)
+             "order_count": 3,           # ixtiyoriy
+             "order_id": "ORD-456"       # ixtiyoriy
+           }
+
+        2. call_now — Belgilangan raqamga darhol qo'ng'iroq
+           {
+             "event": "call_now",
+             "phone": "+998901234567",
+             "message_uz": "Salom, sizda yangi buyurtma bor",  # ixtiyoriy
+             "message_ru": "Здравствуйте, у вас новый заказ"   # ixtiyoriy
+           }
+
+        3. order_update — Buyurtma holati o'zgardi
+           {
+             "event": "order_update",
+             "business_id": 123,
+             "order_id": "ORD-456",
+             "status": "cancelled"   # cancelled/completed/accepted
+           }
+
+        Javob:
+          {"ok": true, "event": "...", "action": "..."}
+        """
+        # 1. Body o'qish (HMAC uchun raw bytes kerak)
+        try:
+            body_bytes = await request.read()
+        except Exception:
+            return web.Response(status=400, text="Body o'qib bo'lmadi")
+
+        # 2. Autentifikatsiya
+        sig_header = request.headers.get("X-Webhook-Signature", "")
+        if sig_header.startswith("sha256="):
+            if not await self._verify_hmac_body(body_bytes, sig_header):
+                logger.warning(f"Inbound webhook: noto'g'ri HMAC imzo ({request.remote})")
+                return web.Response(status=401, text="Noto'g'ri imzo")
+        else:
+            if not self._verify_inbound_secret(request):
+                logger.warning(f"Inbound webhook: noto'g'ri secret ({request.remote})")
+                return web.Response(status=401, text="Unauthorized")
+
+        # 3. JSON parse
+        try:
+            import json as _json
+            body = _json.loads(body_bytes)
+        except Exception:
+            return web.Response(status=400, text="Noto'g'ri JSON")
+
+        event = str(body.get("event", "")).strip()
+        if not event:
+            return self._json({"ok": False, "error": "event maydoni kerak"}, status=400)
+
+        logger.info(f"Inbound webhook: event={event} from={request.remote}")
+
+        # ── EVENT: new_order ──────────────────────────────────────────────────
+        if event == "new_order":
+            return await self._handle_new_order(body)
+
+        # ── EVENT: call_now ───────────────────────────────────────────────────
+        elif event == "call_now":
+            return await self._handle_call_now(body)
+
+        # ── EVENT: order_update ───────────────────────────────────────────────
+        elif event == "order_update":
+            return await self._handle_order_update(body)
+
+        # ── Noma'lum event ────────────────────────────────────────────────────
+        else:
+            logger.info(f"Inbound webhook: noma'lum event '{event}' — o'tkazildi")
+            return self._json({"ok": True, "event": event, "action": "ignored"})
+
+    async def _handle_new_order(self, body: dict):
+        """new_order eventi — biznesga qo'ng'iroq navbatiga qo'shish"""
+        business_id = body.get("business_id")
+        phone = str(body.get("phone", "")).strip()
+        order_count = int(body.get("order_count", 1))
+        order_id = body.get("order_id", "")
+
+        if not business_id and not phone:
+            return self._json({"ok": False, "error": "business_id yoki phone kerak"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        # Telefon raqam yo'q bo'lsa — Nonbor dan olishga urinish
+        if not phone and business_id and hasattr(ad, 'nonbor'):
+            try:
+                biz_data = await ad.nonbor.get_business_detail(business_id)
+                if biz_data:
+                    phone = (biz_data.get("phone_number") or biz_data.get("phone")
+                             or biz_data.get("mobile") or "")
+            except Exception as e:
+                logger.warning(f"new_order: biznes {business_id} telefoni olinmadi: {e}")
+
+        if not phone:
+            return self._json({"ok": False, "error": "Telefon raqami topilmadi"}, status=422)
+
+        # Qo'ng'iroq navbatiga qo'shish
+        logger.info(f"Inbound webhook new_order: biz={business_id} phone={phone} count={order_count}")
+
+        async def _enqueue():
+            try:
+                if hasattr(ad, '_call_business_now'):
+                    await ad._call_business_now(
+                        phone=phone,
+                        business_id=business_id,
+                        order_count=order_count,
+                        order_id=str(order_id) if order_id else None,
+                        source="webhook",
+                    )
+                else:
+                    logger.warning("new_order: _call_business_now metodi topilmadi")
+            except Exception as e:
+                logger.error(f"new_order qo'ng'iroq xatosi: {e}")
+
+        asyncio.create_task(_enqueue())
+
+        return self._json({
+            "ok": True,
+            "event": "new_order",
+            "action": "queued",
+            "phone": phone,
+            "business_id": business_id,
+            "order_count": order_count,
+        })
+
+    async def _handle_call_now(self, body: dict):
+        """call_now eventi — belgilangan raqamga darhol qo'ng'iroq"""
+        phone = str(body.get("phone", "")).strip()
+        if not phone:
+            return self._json({"ok": False, "error": "phone maydoni kerak"}, status=400)
+
+        # Faqat raqam va + belgisi
+        clean = re.sub(r"[^\d+]", "", phone)
+        if len(clean) < 7:
+            return self._json({"ok": False, "error": "Telefon raqami noto'g'ri"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        message_uz = str(body.get("message_uz", "")).strip()
+        message_ru = str(body.get("message_ru", "")).strip()
+
+        logger.info(f"Inbound webhook call_now: phone={clean}")
+
+        async def _call():
+            try:
+                # TTS — xabar berilsa yangi audio, bo'lmasa standart
+                if message_uz or message_ru and hasattr(ad, 'tts'):
+                    from services.tts_service import TTSService
+                    tts: TTSService = ad.tts
+                    if message_uz:
+                        await tts.generate_audio(message_uz, lang="uz",
+                                                  filename=f"webhook_{clean}_uz")
+                    if message_ru:
+                        await tts.generate_audio(message_ru, lang="ru",
+                                                  filename=f"webhook_{clean}_ru")
+
+                if hasattr(ad, '_call_business_now'):
+                    await ad._call_business_now(
+                        phone=clean,
+                        business_id=None,
+                        order_count=1,
+                        source="webhook_call_now",
+                    )
+                elif hasattr(ad, 'ami') and ad.ami:
+                    await ad.ami.originate_call(phone=clean)
+            except Exception as e:
+                logger.error(f"call_now xatosi: {e}")
+
+        asyncio.create_task(_call())
+
+        return self._json({
+            "ok": True,
+            "event": "call_now",
+            "action": "initiated",
+            "phone": clean,
+        })
+
+    async def _handle_order_update(self, body: dict):
+        """order_update eventi — buyurtma holati o'zgardi"""
+        business_id = body.get("business_id")
+        order_id = body.get("order_id", "")
+        status = str(body.get("status", "")).strip()
+
+        if not status:
+            return self._json({"ok": False, "error": "status maydoni kerak"}, status=400)
+
+        logger.info(f"Inbound webhook order_update: biz={business_id} order={order_id} status={status}")
+
+        ad = self.autodialer
+        cancelled_statuses = {"cancelled", "rejected", "completed", "delivered"}
+
+        if status.lower() in cancelled_statuses and ad and hasattr(ad, '_cancel_pending_call'):
+            try:
+                cancelled = await ad._cancel_pending_call(
+                    business_id=business_id,
+                    order_id=str(order_id) if order_id else None,
+                )
+                return self._json({
+                    "ok": True,
+                    "event": "order_update",
+                    "action": "call_cancelled" if cancelled else "no_pending_call",
+                    "status": status,
+                })
+            except Exception as e:
+                logger.error(f"order_update bekor qilish xatosi: {e}")
+
+        return self._json({
+            "ok": True,
+            "event": "order_update",
+            "action": "noted",
+            "status": status,
+        })
+
+    # ===== HEALTH =====
 
     async def health(self, request):
         """Health check"""
