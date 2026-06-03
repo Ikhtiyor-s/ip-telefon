@@ -559,9 +559,15 @@ class NonborService:
         items = order.get("order_item") or order.get("items") or []
         if items:
             first_item = items[0]
+            # Nonbor webhook: product_name to'g'ridan-to'g'ri field
+            # Nonbor API: product.name (nested object)
             product = first_item.get("product") or {}
-            result["product_name"] = product.get("name") or product.get("title", "Noma'lum")
-            result["quantity"] = first_item.get("count", 1)
+            result["product_name"] = (
+                first_item.get("product_name") or
+                product.get("name") or product.get("title") or "Noma'lum"
+            )
+            # Nonbor webhook: quantity, Nonbor API: count
+            result["quantity"] = first_item.get("quantity") or first_item.get("count") or 1
 
         # Lead name format (amoCRM bilan mos)
         result["lead_name"] = f"#{order['id']} | {result['client_name']} | {order.get('payment_method', 'CASH')} | {result['price']}"
