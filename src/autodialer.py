@@ -709,9 +709,13 @@ class AutodialerPro:
         else:
             logger.info("AMI ulanish o'tkazib yuborildi (Windows rejim)")
 
-        # Nonbor API polling boshlash
-        logger.info("Nonbor API polling boshlash...")
-        await self.nonbor_poller.start()
+        # Nonbor API polling boshlash (NONBOR_POLLING_ENABLED=false bo'lsa o'tkazib yuboriladi)
+        self._polling_enabled = os.getenv("NONBOR_POLLING_ENABLED", "true").lower() not in ("false", "0", "no")
+        if self._polling_enabled:
+            logger.info("Nonbor API polling boshlash...")
+            await self.nonbor_poller.start()
+        else:
+            logger.info("Nonbor API polling o'chirilgan (NONBOR_POLLING_ENABLED=false) — webhook rejimi")
 
         # Stats handler polling boshlash
         if self.stats_handler:
@@ -767,7 +771,8 @@ class AutodialerPro:
 
         # Servislarni yopish
         await self.admin_call_service.stop()
-        await self.nonbor_poller.stop()
+        if getattr(self, '_polling_enabled', True):
+            await self.nonbor_poller.stop()
         if self.stats_handler:
             await self.stats_handler.stop_polling()
         if not self.skip_asterisk:

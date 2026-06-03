@@ -1365,11 +1365,23 @@ class AutodialerAPI:
     async def inbound_webhook_ping(self, request):
         """GET /webhook/inbound/ping — endpoint mavjudligini tekshirish"""
         configured = bool(os.getenv("INBOUND_WEBHOOK_SECRET", ""))
+        polling = os.getenv("NONBOR_POLLING_ENABLED", "true").lower() not in ("false", "0", "no")
         return self._json({
             "ok": True,
             "endpoint": "/webhook/inbound",
             "configured": configured,
-            "supported_events": ["new_order", "call_now", "order_update"],
+            "polling_enabled": polling,
+            "supported_events": {
+                "new_orders": "Nonbor dan to'liq buyurtmalar ro'yxati (polling o'rniga)",
+                "orders_resolved": "Buyurtmalar hal bo'ldi (ACCEPTED/CANCELLED)",
+                "new_order": "Yakka buyurtma — darhol qo'ng'iroq",
+                "call_now": "Belgilangan raqamga darhol qo'ng'iroq",
+                "order_update": "Buyurtma holati o'zgardi",
+            },
+            "auth": {
+                "header": "X-Webhook-Secret",
+                "hmac_header": "X-Webhook-Signature (sha256=...)",
+            },
         })
 
     async def handle_inbound_webhook(self, request):
@@ -1440,8 +1452,16 @@ class AutodialerAPI:
 
         logger.info(f"Inbound webhook: event={event} from={request.remote}")
 
-        # ── EVENT: new_order ──────────────────────────────────────────────────
-        if event == "new_order":
+        # ── EVENT: new_orders — Nonbor dan to'liq buyurtmalar ───────────────
+        if event == "new_orders":
+            return await self._handle_new_orders_webhook(body)
+
+        # ── EVENT: orders_resolved — hal bo'lgan buyurtmalar ─────────────────
+        elif event == "orders_resolved":
+            return await self._handle_orders_resolved_webhook(body)
+
+        # ── EVENT: new_order (yakka) — tezkor trigger ────────────────────────
+        elif event == "new_order":
             return await self._handle_new_order(body)
 
         # ── EVENT: call_now ───────────────────────────────────────────────────
@@ -1456,6 +1476,131 @@ class AutodialerAPI:
         else:
             logger.info(f"Inbound webhook: noma'lum event '{event}' — o'tkazildi")
             return self._json({"ok": True, "event": event, "action": "ignored"})
+
+    async def _handle_new_orders_webhook(self, body: dict):
+        """
+        new_orders eventi — Nonbor'dan to'liq buyurtmalar ro'yxati.
+        Polling o'rniga ishlatiladi: barcha ma'lumotlar webhook da keladi.
+
+        Body:
+          {
+            "event": "new_orders",
+            "orders": [
+              {
+                "id": 123,
+                "state": "CHECKING",
+                "total_price": 150000,
+                "payment_method": "CASH",
+                "business": {
+                  "id": 456, "title": "Do'kon nomi",
+                  "address": "Manzil", "phone_number": "+998901234567",
+                  "language": "uz"
+                },
+                "user": {"first_name": "Ali", "last_name": "Valiyev", "phone": "+998907654321"},
+                "order_item": [{"count": 2, "product": {"name": "Mahsulot nomi"}}],
+                "delivery": {"phone_number": "+998907654321"}
+              }
+            ]
+          }
+        """
+        from services.nonbor_service import NonborService
+
+        orders = body.get("orders") or []
+        if not isinstance(orders, list) or not orders:
+            return self._json({"ok": False, "error": "orders massivi kerak"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        order_ids = []
+        for order in orders:
+            order_id = order.get("id")
+            if not order_id:
+                continue
+            order_ids.append(int(order_id))
+            # Webhook ma'lumotlarini normalize qilib cache ga qo'yish
+            # Bu _on_new_orders ichida API call qilinmasligi uchun
+            if int(order_id) not in ad._order_data_cache:
+                normalized = NonborService.normalize_order_from_dict(order)
+                ad._order_data_cache[int(order_id)] = normalized
+                logger.info(
+                    f"Webhook new_orders: #{order_id} cache ga qo'yildi — "
+                    f"seller={normalized.get('seller_name')} "
+                    f"phone={normalized.get('seller_phone')}"
+                )
+
+        if not order_ids:
+            return self._json({"ok": False, "error": "Yaroqli order ID topilmadi"}, status=400)
+
+        # Polling callback'ini chaqirish — barcha logika shu yerda
+        asyncio.create_task(ad._on_new_orders(
+            count=len(order_ids),
+            new_ids=order_ids,
+        ))
+
+        logger.info(f"Webhook new_orders: {len(order_ids)} ta buyurtma qabul qilindi: {order_ids}")
+        return self._json({
+            "ok": True,
+            "event": "new_orders",
+            "action": "processing",
+            "order_ids": order_ids,
+            "count": len(order_ids),
+        })
+
+    async def _handle_orders_resolved_webhook(self, body: dict):
+        """
+        orders_resolved eventi — buyurtmalar hal bo'ldi (ACCEPTED/CANCELLED).
+        Polling o'rniga: Nonbor status o'zgarganda bu webhook keladi.
+
+        Body:
+          {
+            "event": "orders_resolved",
+            "resolved_ids": [123, 124],
+            "remaining_count": 5,
+            "orders": [   # ixtiyoriy — hal bo'lgan buyurtmalar to'liq ma'lumoti
+              {"id": 123, "state": "ACCEPTED", "business": {...}, ...}
+            ]
+          }
+        """
+        from services.nonbor_service import NonborService
+
+        resolved_ids = body.get("resolved_ids") or []
+        if not isinstance(resolved_ids, list):
+            resolved_ids = []
+
+        remaining_count = int(body.get("remaining_count", 0))
+
+        # Hal bo'lgan buyurtmalar ma'lumotini cache ga qo'yish (agar kelgan bo'lsa)
+        orders = body.get("orders") or []
+        ad = self.autodialer
+        if ad and orders:
+            for order in orders:
+                order_id = order.get("id")
+                if order_id:
+                    normalized = NonborService.normalize_order_from_dict(order)
+                    ad._order_data_cache[int(order_id)] = normalized
+
+        if not resolved_ids:
+            return self._json({"ok": False, "error": "resolved_ids ro'yxati kerak"}, status=400)
+
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        resolved_ids = [int(i) for i in resolved_ids]
+        asyncio.create_task(ad._on_orders_resolved(
+            resolved_ids=resolved_ids,
+            remaining_count=remaining_count,
+        ))
+
+        logger.info(f"Webhook orders_resolved: {resolved_ids}, qoldi={remaining_count}")
+        return self._json({
+            "ok": True,
+            "event": "orders_resolved",
+            "action": "processing",
+            "resolved_ids": resolved_ids,
+            "remaining_count": remaining_count,
+        })
 
     async def _handle_new_order(self, body: dict):
         """new_order eventi — biznesga qo'ng'iroq navbatiga qo'shish"""
