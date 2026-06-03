@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
     "known_checking_biz_ids": [],
     # Nonbor API health monitoring
     "api_health_enabled": True,
-    "api_health_check_interval": 60,    # har 60 soniyada tekshirish
+    "api_health_check_interval": 600,   # har 10 daqiqada tekshirish (normal holat)
+    "api_health_check_interval_down": 60,  # API o'chiq bo'lganda har 60 soniyada (tiklandi aniqlash)
     "api_health_call_interval": 300,    # API o'chiq bo'lganda har 5 daqiqada qayta qo'ng'iroq
     "api_health_timeout": 10,           # HTTP timeout soniyada
     "api_health_language": "uz",
@@ -42,11 +43,13 @@ DEFAULT_CONFIG = {
 class AdminCallService:
     """Admin qo'ng'iroq servisi"""
 
-    def __init__(self, tts, call_manager, nonbor, skip_asterisk: bool, data_dir: str = "data"):
+    def __init__(self, tts, call_manager, nonbor, skip_asterisk: bool,
+                 data_dir: str = "data", telegram=None):
         self.tts = tts
         self.call_manager = call_manager
         self.nonbor = nonbor
         self.skip_asterisk = skip_asterisk
+        self.telegram = telegram  # TelegramService (ixtiyoriy)
 
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "admin_call_config.json"
@@ -64,6 +67,7 @@ class AdminCallService:
         self._api_down: bool = False
         self._api_down_since: Optional[datetime] = None
         self._api_last_called_at: Optional[datetime] = None
+        self._api_last_ok_at: Optional[datetime] = None
 
         logger.info(f"AdminCallService yaratildi: {len(self.config['admin_phones'])} ta admin raqam")
 
@@ -431,7 +435,11 @@ class AdminCallService:
             except Exception as e:
                 logger.error(f"API health check xatosi: {e}", exc_info=True)
 
-            interval = self.config.get("api_health_check_interval", 60)
+            # Down bo'lganda tez tekshirish (tiklandi aniqlash uchun)
+            if self._api_down:
+                interval = self.config.get("api_health_check_interval_down", 60)
+            else:
+                interval = self.config.get("api_health_check_interval", 600)
             await asyncio.sleep(interval)
 
     async def _check_nonbor_api(self):
@@ -459,10 +467,12 @@ class AdminCallService:
             is_ok = False
 
         if is_ok:
+            self._api_last_ok_at = datetime.now()
             if self._api_down:
                 # Tiklandi
                 down_minutes = self._down_minutes()
                 logger.info(f"Nonbor API TIKLANDI — {down_minutes} daqiqa o'chiq edi")
+                await self._telegram_api_recovered(down_minutes)
                 self._api_down = False
                 self._api_down_since = None
                 self._api_last_called_at = None
@@ -472,6 +482,7 @@ class AdminCallService:
                 self._api_down = True
                 self._api_down_since = datetime.now()
                 logger.error(f"Nonbor API JAVOB BERMAYAPTI — qo'ng'iroq boshlanadi")
+                await self._telegram_api_down()
                 await self._call_api_down()
             else:
                 # Hali ham o'chiq — qayta qo'ng'iroq intervalini tekshirish
@@ -487,6 +498,45 @@ class AdminCallService:
         if not self._api_down_since:
             return 0
         return max(1, int((datetime.now() - self._api_down_since).total_seconds() / 60))
+
+    async def _telegram_api_down(self):
+        """Telegram: Nonbor API o'chiq xabari."""
+        if not self.telegram:
+            return
+        try:
+            since = self._api_down_since or datetime.now()
+            since_str = since.strftime("%H:%M:%S")
+            last_ok_str = (
+                self._api_last_ok_at.strftime("%H:%M %d.%m.%Y")
+                if self._api_last_ok_at else "noma'lum"
+            )
+            url = os.getenv("NONBOR_BASE_URL", "https://prod.nonbor.uz/api/v2")
+            check_url = f"{url}/telegram_bot/businesses/accepted/"
+            minutes = self._down_minutes()
+            text = (
+                f"🔴 *API ISHLAMAYAPTI\\!*\n\n"
+                f"🕐 {since_str} dan beri ishlamayapti ({minutes} daqiqa)\n"
+                f"✅ Oxirgi muvaffaqiyatli: {last_ok_str}\n"
+                f"🔗 `{check_url}`"
+            )
+            await self.telegram.send_message(text, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.warning(f"Telegram API-down xabari yuborilmadi: {e}")
+
+    async def _telegram_api_recovered(self, down_minutes: int):
+        """Telegram: Nonbor API tiklandi xabari."""
+        if not self.telegram:
+            return
+        try:
+            now_str = datetime.now().strftime("%H:%M:%S")
+            text = (
+                f"✅ *API tiklandi\\!*\n\n"
+                f"⏱ Ishlamagan vaqt: {down_minutes} daqiqa\n"
+                f"🕐 {now_str}"
+            )
+            await self.telegram.send_message(text, parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.warning(f"Telegram recovered xabari yuborilmadi: {e}")
 
     async def _prepare_alert_audio(self):
         """Startup da api_alert audio faylini Asterisk pathga tayyorlash.

@@ -349,6 +349,7 @@ class AutodialerPro:
             nonbor=self.nonbor,
             skip_asterisk=self.skip_asterisk,
             data_dir=data_dir,
+            telegram=self.telegram,
         )
 
         # HTTP API server (admin panel uchun)
