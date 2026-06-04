@@ -284,9 +284,12 @@ class AutodialerPro:
 
         self.nonbor = NonborService(status_name="CHECKING")
 
+        # Adaptiv polling: bo'sh paytda 8s, faol holatda 3s (60s davomida)
         self.nonbor_poller = NonborPoller(
             nonbor_service=self.nonbor,
-            polling_interval=5,
+            polling_interval=8,
+            active_interval=3,
+            active_duration=60,
             on_new_orders=self._on_new_orders,
             on_orders_resolved=self._on_orders_resolved
         )
