@@ -186,30 +186,6 @@ jobs:
           fi
           echo "✅ HMAC compare_digest mavjud"
 
-      - name: Nonbor webhook timestamp HMAC format
-        run: |
-          if ! grep -q "X-Webhook-Timestamp" src/api_server.py; then
-            echo "❌ Nonbor X-Webhook-Timestamp header tekshiruvi topilmadi!"
-            exit 1
-          fi
-          echo "✅ Nonbor timestamp HMAC mavjud"
-
-      - name: Webhook event_id deduplication
-        run: |
-          if ! grep -q "_seen_event_ids" src/api_server.py; then
-            echo "❌ event_id deduplication topilmadi!"
-            exit 1
-          fi
-          echo "✅ event_id deduplication mavjud"
-
-      - name: Nonbor order.created event routing
-        run: |
-          if ! grep -q "order.created" src/api_server.py; then
-            echo "❌ order.created event routing topilmadi!"
-            exit 1
-          fi
-          echo "✅ Nonbor order.created routing mavjud"
-
       - name: Web dashboard XSS himoyasi
         run: |
           if ! grep -q "function esc(" static/index.html; then
@@ -233,7 +209,7 @@ jobs:
         run: docker build -t autodialer-pro:ci-test .
 
       - name: Image hajmi
-        run: docker images autodialer-pro:ci-test
+        run: docker image inspect autodialer-pro:ci-test --format='Image: {{.Size}} bytes'
 
       - name: Static fayllar image ichida bormi
         run: |

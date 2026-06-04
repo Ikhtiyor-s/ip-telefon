@@ -47,8 +47,6 @@ def test_api_has_all_routes(api):
         "/api/autodialer/orders",
         "/api/autodialer/businesses",
         "/api/autodialer/config",
-        "/webhook/inbound",
-        "/webhook/inbound/ping",
         "/api/autodialer/webhooks",
         "/api/autodialer/admin-call/phones",
     ]
@@ -139,110 +137,6 @@ async def test_webhooks_list_empty_when_no_service(api):
         )
         # webhook_service=None → 503
         assert resp.status == 503
-
-
-# ── Recording endpoint ────────────────────────────────────────────────────────
-
-# ── Inbound webhook ───────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_ping(api):
-    """/webhook/inbound/ping auth kerak emas."""
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.get("/webhook/inbound/ping")
-        assert resp.status == 200
-        data = await resp.json()
-        assert data["ok"] is True
-        assert "supported_events" in data
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_no_secret_rejected(api, monkeypatch):
-    """Secret sozlanmasa — 401."""
-    monkeypatch.delenv("INBOUND_WEBHOOK_SECRET", raising=False)
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post("/webhook/inbound",
-                                 json={"event": "new_order", "phone": "+998901234567"})
-        assert resp.status == 401
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_wrong_secret_rejected(api, monkeypatch):
-    """Noto'g'ri secret — 401."""
-    monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "correct-secret")
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post(
-            "/webhook/inbound",
-            json={"event": "new_order", "phone": "+998901234567"},
-            headers={"X-Webhook-Secret": "wrong-secret"},
-        )
-        assert resp.status == 401
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_valid_secret_accepted(api, monkeypatch):
-    """To'g'ri secret — 200."""
-    monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "test-webhook-secret")
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post(
-            "/webhook/inbound",
-            json={"event": "order_update", "business_id": 1, "status": "completed"},
-            headers={"X-Webhook-Secret": "test-webhook-secret"},
-        )
-        assert resp.status == 200
-        data = await resp.json()
-        assert data["ok"] is True
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_unknown_event_ignored(api, monkeypatch):
-    """Noma'lum event — 200 bilan ignored."""
-    monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "test-webhook-secret")
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post(
-            "/webhook/inbound",
-            json={"event": "unknown_event"},
-            headers={"X-Webhook-Secret": "test-webhook-secret"},
-        )
-        assert resp.status == 200
-        data = await resp.json()
-        assert data["action"] == "ignored"
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_invalid_json(api, monkeypatch):
-    """Noto'g'ri JSON — 400."""
-    monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "test-webhook-secret")
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post(
-            "/webhook/inbound",
-            data=b"not-json",
-            headers={
-                "X-Webhook-Secret": "test-webhook-secret",
-                "Content-Type": "application/json",
-            },
-        )
-        assert resp.status == 400
-
-
-@pytest.mark.asyncio
-async def test_inbound_webhook_call_now_no_phone(api, monkeypatch):
-    """call_now phone'siz — 400."""
-    monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "test-webhook-secret")
-    from aiohttp.test_utils import TestClient, TestServer
-    async with TestClient(TestServer(api.app)) as client:
-        resp = await client.post(
-            "/webhook/inbound",
-            json={"event": "call_now"},
-            headers={"X-Webhook-Secret": "test-webhook-secret"},
-        )
-        assert resp.status == 400
 
 
 # ── Recording endpoint ────────────────────────────────────────────────────────

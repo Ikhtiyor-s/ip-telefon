@@ -559,107 +559,13 @@ class NonborService:
         items = order.get("order_item") or order.get("items") or []
         if items:
             first_item = items[0]
-            # Nonbor webhook: product_name to'g'ridan-to'g'ri field
-            # Nonbor API: product.name (nested object)
-            product = first_item.get("product") or {}
-            result["product_name"] = (
-                first_item.get("product_name") or
-                product.get("name") or product.get("title") or "Noma'lum"
-            )
-            # Nonbor webhook: quantity, Nonbor API: count
-            result["quantity"] = first_item.get("quantity") or first_item.get("count") or 1
-
-        # Lead name format (amoCRM bilan mos)
-        result["lead_name"] = f"#{order['id']} | {result['client_name']} | {order.get('payment_method', 'CASH')} | {result['price']}"
-
-        return result
-
-    @staticmethod
-    def normalize_order_from_dict(order: dict) -> dict:
-        """
-        Webhook dan kelgan raw Nonbor order dict'ini internal formatga o'girish.
-        get_order_full_data() bilan bir xil format, lekin API call qilmasdan.
-
-        Kiruvchi format (Nonbor API bilan bir xil):
-          {id, state, total_price, payment_method,
-           business: {id, title, address, phone_number, language, ...},
-           user: {first_name, last_name, phone, lang},
-           order_item: [{count, product: {name}}],
-           delivery: {phone, phone_number, recipient_phone}}
-
-        Qaytaradi: get_order_full_data() bilan mos dict
-        """
-        order_id = order.get("id", 0)
-        result = {
-            "lead_id": order_id,
-            "lead_name": "Noma'lum",
-            "seller_name": "Noma'lum",
-            "seller_phone": "Noma'lum",
-            "seller_address": "Noma'lum",
-            "seller_language": "uz",
-            "client_name": "Noma'lum",
-            "client_phone": "Noma'lum",
-            "product_name": "Noma'lum",
-            "quantity": 1,
-            "price": 0,
-            "order_number": str(order_id),
-        }
-
-        result["lead_id"] = order_id
-        result["order_number"] = str(order_id)
-        result["price"] = (order.get("total_price", 0) or 0) / 100
-
-        # Biznes (sotuvchi)
-        business = order.get("business") or {}
-        if business:
-            result["business_id"] = business.get("id")
-            result["seller_name"] = business.get("title", "Noma'lum")
-            result["seller_address"] = business.get("address", "Noma'lum")
-
-            phone = (
-                business.get("phone_number") or business.get("phone") or
-                business.get("mobile") or business.get("contact_phone") or
-                business.get("seller_phone") or ""
-            )
-            if phone:
-                result["seller_phone"] = f"+{phone}" if not str(phone).startswith("+") else str(phone)
-
-            lang = (
-                business.get("language") or business.get("lang") or
-                business.get("owner_language") or business.get("tg_language") or ""
-            )
-            if lang:
-                result["seller_language"] = str(lang).lower()[:2]
-
-        # Mijoz
-        user = order.get("user") or {}
-        delivery = order.get("delivery") or {}
-        if user:
-            first = user.get("first_name", "")
-            last = user.get("last_name", "")
-            result["client_name"] = f"{first} {last}".strip() or "Noma'lum"
-
-        client_phone = (
-            user.get("phone") or user.get("phone_number") or
-            delivery.get("phone") or delivery.get("phone_number") or
-            delivery.get("recipient_phone") or
-            order.get("phone") or order.get("client_phone") or ""
-        )
-        if client_phone and str(client_phone).strip() not in ("None", "null", ""):
-            result["client_phone"] = str(client_phone).strip()
-
-        # Mahsulot
-        items = order.get("order_item") or order.get("items") or []
-        if items:
-            first_item = items[0]
             product = first_item.get("product") or {}
             result["product_name"] = product.get("name") or product.get("title", "Noma'lum")
             result["quantity"] = first_item.get("count", 1)
 
-        result["lead_name"] = (
-            f"#{order_id} | {result['client_name']} | "
-            f"{order.get('payment_method', 'CASH')} | {result['price']}"
-        )
+        # Lead name format (amoCRM bilan mos)
+        result["lead_name"] = f"#{order['id']} | {result['client_name']} | {order.get('payment_method', 'CASH')} | {result['price']}"
+
         return result
 
     async def get_seller_id(self, phone: str) -> Optional[int]:
