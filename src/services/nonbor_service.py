@@ -47,11 +47,7 @@ class NonborService:
         # Orders cache - bir polling intervalda faqat 1 ta API so'rov
         self._orders_cache: Optional[List[Dict]] = None
         self._orders_cache_time: float = 0
-        self._orders_cache_ttl: float = 2.5  # 2.5s — adaptiv polling uchun (3s active dan kam)
-
-        # Businesses cache TTL — biznes ma'lumotlari kamdan-kam o'zgaradi
-        self._businesses_cache_time: float = 0
-        self._businesses_cache_ttl: float = 60.0  # 60 soniya
+        self._orders_cache_ttl: float = 4.0  # 4 soniya cache (5s polling dan kam)
 
         logger.info(f"Nonbor servisi ishga tushdi")
 
@@ -106,30 +102,14 @@ class NonborService:
                 logger.error(f"Nonbor API ulanish xatosi: {e} (ketma-ket: {self._consecutive_errors})")
             return None
 
-    async def get_businesses(self, force: bool = False) -> List[Dict]:
-        """Barcha tasdiqlangan bizneslarni olish (60s TTL cache bilan).
-
-        Args:
-            force: True bo'lsa cache ni e'tiborsiz qoldiradi (API ga so'rov yuboriladi)
-        """
-        import time
-        now = time.monotonic()
-
-        # Cache dan qaytarish (TTL ichida bo'lsa, API call qilmaslik)
-        if (not force and self._businesses_cache
-                and (now - self._businesses_cache_time) < self._businesses_cache_ttl):
-            return list(self._businesses_cache.values())
-
+    async def get_businesses(self) -> List[Dict]:
+        """Barcha tasdiqlangan bizneslarni olish"""
         data = await self._make_request("GET", "telegram_bot/businesses/accepted/")
         if not data or not data.get("success"):
-            # API xato — agar cache bor bo'lsa, eski ma'lumotni qaytar
-            if self._businesses_cache:
-                return list(self._businesses_cache.values())
             return []
 
         businesses = data.get("result", [])
         # Cache yangilash
-        self._businesses_cache_time = now
         for biz in businesses:
             self._businesses_cache[biz["id"]] = biz
 
@@ -750,21 +730,12 @@ class NonborPoller:
     def __init__(
         self,
         nonbor_service: NonborService,
-        polling_interval: int = 8,
-        active_interval: int = 3,
-        active_duration: int = 60,
+        polling_interval: int = 5,
         on_new_orders: callable = None,
         on_orders_resolved: callable = None
     ):
-        """Adaptiv polling:
-        - polling_interval: normal (bo'sh) holatdagi interval — default 8s
-        - active_interval: yangi/o'zgargan buyurtma kelganda — default 3s
-        - active_duration: oxirgi faoliyatdan keyin faol rejimda turish vaqti — default 60s
-        """
         self.nonbor = nonbor_service
         self.polling_interval = polling_interval
-        self.active_interval = active_interval
-        self.active_duration = active_duration
         self.on_new_orders = on_new_orders
         self.on_orders_resolved = on_orders_resolved
 
@@ -772,25 +743,8 @@ class NonborPoller:
         self._last_count = 0
         self._last_ids: Set[int] = set()  # Oldingi polling dagi ID lar
         self._task: Optional[asyncio.Task] = None
-        self._last_activity_time: float = 0  # oxirgi yangi/hal bo'lgan buyurtma vaqti
 
-        logger.info(
-            f"Nonbor Poller yaratildi: idle={polling_interval}s, "
-            f"active={active_interval}s ({active_duration}s davomida)"
-        )
-
-    def _current_interval(self) -> int:
-        """Hozirgi polling intervalini hisoblash (faol/bo'sh rejim)"""
-        import time
-        if self._last_activity_time and \
-                (time.monotonic() - self._last_activity_time) < self.active_duration:
-            return self.active_interval
-        return self.polling_interval
-
-    def _mark_activity(self):
-        """Faoliyat vaqtini yangilash — keyingi pollingni tezlashtirish uchun"""
-        import time
-        self._last_activity_time = time.monotonic()
+        logger.info(f"Nonbor Poller yaratildi: {polling_interval}s interval")
 
     async def start(self):
         """Polling boshlash"""
@@ -856,9 +810,6 @@ class NonborPoller:
                     new_ids = current_id_set - self._last_ids
                     removed_ids = self._last_ids - current_id_set
 
-                    # Har qanday o'zgarish — faol rejimga o'tish
-                    self._mark_activity()
-
                     # Yangi buyurtmalar keldi
                     if new_ids and self.on_new_orders:
                         await self.on_new_orders(count, list(current_id_set))
@@ -871,13 +822,13 @@ class NonborPoller:
 
                 self._last_count = count
 
-                await asyncio.sleep(self._current_interval())
+                await asyncio.sleep(self.polling_interval)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Polling xatosi: {e}")
-                await asyncio.sleep(self._current_interval())
+                await asyncio.sleep(self.polling_interval)
 
     @property
     def current_count(self) -> int:
