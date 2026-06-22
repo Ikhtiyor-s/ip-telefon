@@ -15,10 +15,13 @@ import logging
 import os
 import subprocess
 import asyncio
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from aiohttp import web
 import aiohttp
+
+from utils.webhook_dedup import EventDedup
 
 logger = logging.getLogger("api_server")
 
@@ -26,6 +29,13 @@ logger = logging.getLogger("api_server")
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 LOGS_DIR = PROJECT_ROOT / "logs"
+
+# Buyurtma yakuniy holatlari — uppercase. Bunga o'tganda kutayotgan qo'ng'iroq
+# bekor qilinadi (autodialer flow tugaydi). Webhook event'larida ham,
+# polling natijasida ham bir xil ishlatiladi.
+RESOLVED_ORDER_STATES = frozenset({
+    "ACCEPTED", "CANCELLED", "REJECTED", "COMPLETED", "DELIVERED",
+})
 
 
 def _safe_int(query: dict, key: str, default: int, min_val: int = 1, max_val: int = 10000) -> int:
@@ -60,6 +70,8 @@ class AutodialerAPI:
         )
         self._setup_routes()
         self._runner = None
+        # Webhook event_id dedup (Nonbor v2 spec — X-Webhook-Id)
+        self._event_dedup = EventDedup(maxsize=10000, ttl_seconds=3600)
 
     @web.middleware
     async def _auth_cors_middleware(self, request, handler):
@@ -70,10 +82,11 @@ class AutodialerAPI:
         if request.method == "OPTIONS":
             resp = web.Response()
         else:
-            # Health + bot webhook + web panel — ochiq (o'z auth logikasi bor)
+            # Health + bot webhook + web panel + kiruvchi webhook — ochiq (o'z auth logikasi bor)
             if (request.path == "/api/autodialer/health"
                     or request.path.startswith("/api/autodialer/audio/")
                     or request.path == "/notify"
+                    or request.path.startswith("/webhook/")
                     or request.path == "/"
                     or request.path.startswith("/static/")):
                 try:
@@ -153,6 +166,10 @@ class AutodialerAPI:
         r.add_post("/api/autodialer/webhooks/{wid}/test", self.test_webhook)
         # Telegram bot webhook — API ishlamasa darhol admin chaqirish
         r.add_post("/notify", self.handle_bot_notify)
+        # Kiruvchi webhook — tashqi servislardan ma'lumot qabul qilish
+        r.add_post("/webhook/inbound", self.handle_inbound_webhook)
+        r.add_post("/webhook/inbound/", self.handle_inbound_webhook)
+        r.add_get("/webhook/inbound/ping", self.inbound_webhook_ping)
         # Web panel (static)
         r.add_get("/", self._serve_index)
         r.add_static("/static", PROJECT_ROOT / "static", show_index=False)
@@ -1329,6 +1346,495 @@ class AutodialerAPI:
         # Boshqa eventlar uchun
         logger.info(f"Bot notify: noma'lum event '{event}' — o'tkazib yuborildi")
         return self._json({"ok": True, "event": event, "action": "ignored"})
+
+    # ===== KIRUVCHI WEBHOOK =====
+
+    def _verify_inbound_secret(self, request) -> bool:
+        """
+        Kiruvchi webhook autentifikatsiya.
+        Header: X-Webhook-Secret: <INBOUND_WEBHOOK_SECRET>
+        Yoki HMAC: X-Webhook-Signature: sha256=<hmac>
+        """
+        secret = os.getenv("INBOUND_WEBHOOK_SECRET", "")
+        if not secret:
+            logger.warning("INBOUND_WEBHOOK_SECRET sozlanmagan — webhook rad etildi")
+            return False
+
+        # HMAC imzo tekshirish (ustunlik beradi)
+        sig_header = request.headers.get("X-Webhook-Signature", "")
+        if sig_header.startswith("sha256="):
+            return True  # body kerak — _verify_hmac_body da tekshiriladi
+
+        # Oddiy secret key
+        incoming = request.headers.get("X-Webhook-Secret", "")
+        return hmac.compare_digest(incoming, secret)
+
+    async def _verify_hmac_body(self, body: bytes, sig_header: str,
+                                 timestamp: str = "") -> bool:
+        """HMAC-SHA256 imzoni tekshirish.
+
+        timestamp berilsa — yangi Nonbor v2 spec: HMAC(secret, "{ts}.{body}").
+        Aks holda — eski format (orqaga moslik): HMAC(secret, body).
+
+        Timestamp mavjud bo'lsa v1 fallback bermaymiz — bu replay-protection
+        ni zaiflashtirgan bo'lar edi (attacker timestamp'siz v1 imzo yuborib
+        window tekshiruvini chetlab o'tishi mumkin edi).
+        """
+        secret = os.getenv("INBOUND_WEBHOOK_SECRET", "").encode()
+        if timestamp:
+            message = timestamp.encode("utf-8") + b"." + body
+        else:
+            message = body
+        expected = "sha256=" + hmac.new(secret, message, "sha256").hexdigest()
+        return hmac.compare_digest(sig_header, expected)
+
+    async def inbound_webhook_ping(self, request):
+        """GET /webhook/inbound/ping — endpoint mavjudligini tekshirish"""
+        configured = bool(os.getenv("INBOUND_WEBHOOK_SECRET", ""))
+        polling = os.getenv("NONBOR_POLLING_ENABLED", "true").lower() not in ("false", "0", "no")
+        return self._json({
+            "ok": True,
+            "endpoint": "/webhook/inbound",
+            "configured": configured,
+            "polling_enabled": polling,
+            "supported_events": {
+                "new_orders": "Nonbor dan to'liq buyurtmalar ro'yxati (polling o'rniga)",
+                "orders_resolved": "Buyurtmalar hal bo'ldi (ACCEPTED/CANCELLED)",
+                "new_order": "Yakka buyurtma — darhol qo'ng'iroq",
+                "call_now": "Belgilangan raqamga darhol qo'ng'iroq",
+                "order_update": "Buyurtma holati o'zgardi",
+            },
+            "supported_events_v2": [
+                "order.created", "order.updated", "order.status_changed",
+                "order.cancelled", "order.paid", "order.completed",
+                "order.item_updated", "order.delivery_updated",
+            ],
+            "auth": {
+                "header": "X-Webhook-Secret",
+                "hmac_header": "X-Webhook-Signature (sha256=...)",
+            },
+            "auth_v2": {
+                "headers": [
+                    "X-Webhook-Event", "X-Webhook-Id",
+                    "X-Webhook-Timestamp", "X-Webhook-Signature",
+                ],
+                "signature_format": 'sha256=HMAC(secret, "{timestamp}.{body}")',
+                "timestamp_window_seconds": int(
+                    os.getenv("INBOUND_WEBHOOK_TIMESTAMP_WINDOW", "300")
+                ),
+            },
+        })
+
+    async def handle_inbound_webhook(self, request):
+        """
+        POST /webhook/inbound — Tashqi servislardan ma'lumot qabul qilish.
+
+        Auth (birini tanlang):
+          Header: X-Webhook-Secret: <INBOUND_WEBHOOK_SECRET>
+          Header: X-Webhook-Signature: sha256=<hmac_sha256_of_body>
+
+        Qo'llab-quvvatlanadigan eventlar:
+
+        1. new_order — Yangi buyurtma, biznesga darhol qo'ng'iroq
+           {
+             "event": "new_order",
+             "business_id": 123,
+             "phone": "+998901234567",   # ixtiyoriy (yo'q bo'lsa API dan olinadi)
+             "order_count": 3,           # ixtiyoriy
+             "order_id": "ORD-456"       # ixtiyoriy
+           }
+
+        2. call_now — Belgilangan raqamga darhol qo'ng'iroq
+           {
+             "event": "call_now",
+             "phone": "+998901234567",
+             "message_uz": "Salom, sizda yangi buyurtma bor",  # ixtiyoriy
+             "message_ru": "Здравствуйте, у вас новый заказ"   # ixtiyoriy
+           }
+
+        3. order_update — Buyurtma holati o'zgardi
+           {
+             "event": "order_update",
+             "business_id": 123,
+             "order_id": "ORD-456",
+             "status": "cancelled"   # cancelled/completed/accepted
+           }
+
+        Javob:
+          {"ok": true, "event": "...", "action": "..."}
+        """
+        try:
+            body_bytes = await request.read()
+        except Exception:
+            return web.Response(status=400, text="Body o'qib bo'lmadi")
+
+        ts_header = request.headers.get("X-Webhook-Timestamp", "")
+        if ts_header:
+            try:
+                ts = int(ts_header)
+            except ValueError:
+                return web.Response(status=400, text="Noto'g'ri X-Webhook-Timestamp")
+            window = int(os.getenv("INBOUND_WEBHOOK_TIMESTAMP_WINDOW", "300"))
+            if abs(time.time() - ts) > window:
+                logger.warning(
+                    f"Inbound webhook: timestamp window'dan tashqari ts={ts} "
+                    f"window={window}s ({request.remote})"
+                )
+                return web.Response(status=401, text="Timestamp window'dan tashqari")
+
+        sig_header = request.headers.get("X-Webhook-Signature", "")
+        if sig_header.startswith("sha256="):
+            if not await self._verify_hmac_body(body_bytes, sig_header, ts_header):
+                logger.warning(f"Inbound webhook: noto'g'ri HMAC imzo ({request.remote})")
+                return web.Response(status=401, text="Noto'g'ri imzo")
+        else:
+            if not self._verify_inbound_secret(request):
+                logger.warning(f"Inbound webhook: noto'g'ri secret ({request.remote})")
+                return web.Response(status=401, text="Unauthorized")
+
+        try:
+            body = json.loads(body_bytes)
+        except Exception:
+            return web.Response(status=400, text="Noto'g'ri JSON")
+
+        event_id = (request.headers.get("X-Webhook-Id", "")
+                    or str(body.get("event_id", ""))).strip()
+        if event_id and self._event_dedup.seen(event_id):
+            logger.info(f"Inbound webhook: event_id={event_id} dedup — o'tkazildi")
+            return self._json({"ok": True, "deduplicated": True, "event_id": event_id})
+
+        event = (request.headers.get("X-Webhook-Event", "").strip()
+                 or str(body.get("event", "")).strip())
+        if not event:
+            return self._json({"ok": False, "error": "event maydoni kerak"}, status=400)
+
+        logger.info(f"Inbound webhook: event={event} event_id={event_id} from={request.remote}")
+
+        if event.startswith("order."):
+            return await self._handle_v2_order_event(event, body)
+
+        if event == "new_orders":
+            return await self._handle_new_orders_webhook(body)
+
+        # ── EVENT: orders_resolved — hal bo'lgan buyurtmalar ─────────────────
+        elif event == "orders_resolved":
+            return await self._handle_orders_resolved_webhook(body)
+
+        # ── EVENT: new_order (yakka) — tezkor trigger ────────────────────────
+        elif event == "new_order":
+            return await self._handle_new_order(body)
+
+        # ── EVENT: call_now ───────────────────────────────────────────────────
+        elif event == "call_now":
+            return await self._handle_call_now(body)
+
+        # ── EVENT: order_update ───────────────────────────────────────────────
+        elif event == "order_update":
+            return await self._handle_order_update(body)
+
+        # ── Noma'lum event ────────────────────────────────────────────────────
+        else:
+            logger.info(f"Inbound webhook: noma'lum event '{event}' — o'tkazildi")
+            return self._json({"ok": True, "event": event, "action": "ignored"})
+
+    def _cache_order_from_dict(self, order: dict, source: str) -> int | None:
+        """Webhook'dan kelgan order'ni normalize qilib autodialer cache'iga qo'yadi.
+
+        Returns: order_id yoki None (id yo'q/noto'g'ri bo'lsa).
+        Idempotent: cache'da bor bo'lsa qayta yozmaydi.
+
+        Sotuvchi telefon raqami webhook body'da yo'q bo'lsa (Nonbor v2 spec
+        `business` obyektiga `phone_number` qo'shmaydi) — cache'ga qo'ymaymiz.
+        Autodialer'ning mavjud fallback'i (_on_new_orders) to'liq ma'lumotni
+        get_order_full_data orqali API'dan oladi.
+        """
+        ad = self.autodialer
+        if not ad:
+            return None
+        order_id_raw = order.get("id")
+        if not order_id_raw:
+            return None
+        try:
+            order_id = int(order_id_raw)
+        except (TypeError, ValueError):
+            return None
+
+        if order_id in ad._order_data_cache:
+            return order_id
+
+        from services.nonbor_service import NonborService
+        normalized = NonborService.normalize_order_from_dict(order)
+
+        seller_phone = normalized.get("seller_phone") or ""
+        if seller_phone in ("", "Noma'lum"):
+            logger.info(
+                f"Webhook {source}: #{order_id} cache'ga qo'yilmadi — "
+                f"telefon yo'q, autodialer API orqali oladi"
+            )
+            return order_id
+
+        ad._order_data_cache[order_id] = normalized
+        logger.info(
+            f"Webhook {source}: #{order_id} cache ga qo'yildi — "
+            f"seller={normalized.get('seller_name')} phone={seller_phone}"
+        )
+        return order_id
+
+    async def _handle_v2_order_event(self, event: str, body: dict):
+        """Nonbor v2 spec — order.* eventlarni autodialer flow'iga ulash."""
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        order = body.get("order") or {}
+        order_id = self._cache_order_from_dict(order, source=f"v2 {event}")
+        if order_id is None:
+            return self._json({"ok": False, "error": "order.id kerak"}, status=400)
+
+        if event == "order.created":
+            asyncio.create_task(ad._on_new_orders(count=1, new_ids=[order_id]))
+            return self._json({
+                "ok": True, "event": event, "action": "queued", "order_id": order_id,
+            })
+
+        if event == "order.status_changed":
+            new_values = body.get("new_values") or {}
+            raw_state = (new_values.get("state") if isinstance(new_values, dict) else None)
+            new_state = str(raw_state or order.get("state") or "").upper()
+
+            if new_state in RESOLVED_ORDER_STATES:
+                asyncio.create_task(ad._on_orders_resolved(
+                    resolved_ids=[order_id], remaining_count=0,
+                ))
+                return self._json({
+                    "ok": True, "event": event, "action": "resolved",
+                    "order_id": order_id, "state": new_state,
+                })
+            return self._json({
+                "ok": True, "event": event, "action": "noted",
+                "order_id": order_id, "state": new_state,
+            })
+
+        if event in {"order.cancelled", "order.completed"}:
+            asyncio.create_task(ad._on_orders_resolved(
+                resolved_ids=[order_id], remaining_count=0,
+            ))
+            return self._json({
+                "ok": True, "event": event, "action": "resolved", "order_id": order_id,
+            })
+
+        logger.info(f"Webhook v2 {event}: order={order_id} — log only")
+        return self._json({
+            "ok": True, "event": event, "action": "logged", "order_id": order_id,
+        })
+
+    async def _handle_new_orders_webhook(self, body: dict):
+        """new_orders eventi — Nonbor'dan to'liq buyurtmalar ro'yxati (polling o'rniga)."""
+        orders = body.get("orders") or []
+        if not isinstance(orders, list) or not orders:
+            return self._json({"ok": False, "error": "orders massivi kerak"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        order_ids = [
+            oid for oid in
+            (self._cache_order_from_dict(o, source="new_orders") for o in orders)
+            if oid is not None
+        ]
+
+        if not order_ids:
+            return self._json({"ok": False, "error": "Yaroqli order ID topilmadi"}, status=400)
+
+        asyncio.create_task(ad._on_new_orders(count=len(order_ids), new_ids=order_ids))
+
+        logger.info(f"Webhook new_orders: {len(order_ids)} ta buyurtma qabul qilindi: {order_ids}")
+        return self._json({
+            "ok": True,
+            "event": "new_orders",
+            "action": "processing",
+            "order_ids": order_ids,
+            "count": len(order_ids),
+        })
+
+    async def _handle_orders_resolved_webhook(self, body: dict):
+        """orders_resolved eventi — buyurtmalar hal bo'ldi (ACCEPTED/CANCELLED)."""
+        resolved_ids = body.get("resolved_ids") or []
+        if not isinstance(resolved_ids, list):
+            resolved_ids = []
+        if not resolved_ids:
+            return self._json({"ok": False, "error": "resolved_ids ro'yxati kerak"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        remaining_count = int(body.get("remaining_count", 0))
+
+        for order in body.get("orders") or []:
+            self._cache_order_from_dict(order, source="orders_resolved")
+
+        resolved_ids = [int(i) for i in resolved_ids]
+        asyncio.create_task(ad._on_orders_resolved(
+            resolved_ids=resolved_ids,
+            remaining_count=remaining_count,
+        ))
+
+        logger.info(f"Webhook orders_resolved: {resolved_ids}, qoldi={remaining_count}")
+        return self._json({
+            "ok": True,
+            "event": "orders_resolved",
+            "action": "processing",
+            "resolved_ids": resolved_ids,
+            "remaining_count": remaining_count,
+        })
+
+    async def _handle_new_order(self, body: dict):
+        """new_order eventi — biznesga qo'ng'iroq navbatiga qo'shish"""
+        business_id = body.get("business_id")
+        phone = str(body.get("phone", "")).strip()
+        order_count = int(body.get("order_count", 1))
+        order_id = body.get("order_id", "")
+
+        if not business_id and not phone:
+            return self._json({"ok": False, "error": "business_id yoki phone kerak"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        # Telefon raqam yo'q bo'lsa — Nonbor dan olishga urinish
+        if not phone and business_id and hasattr(ad, 'nonbor'):
+            try:
+                biz_data = await ad.nonbor.get_business_detail(business_id)
+                if biz_data:
+                    phone = (biz_data.get("phone_number") or biz_data.get("phone")
+                             or biz_data.get("mobile") or "")
+            except Exception as e:
+                logger.warning(f"new_order: biznes {business_id} telefoni olinmadi: {e}")
+
+        if not phone:
+            return self._json({"ok": False, "error": "Telefon raqami topilmadi"}, status=422)
+
+        # Qo'ng'iroq navbatiga qo'shish
+        logger.info(f"Inbound webhook new_order: biz={business_id} phone={phone} count={order_count}")
+
+        async def _enqueue():
+            try:
+                if hasattr(ad, '_call_business_now'):
+                    await ad._call_business_now(
+                        phone=phone,
+                        business_id=business_id,
+                        order_count=order_count,
+                        order_id=str(order_id) if order_id else None,
+                        source="webhook",
+                    )
+                else:
+                    logger.warning("new_order: _call_business_now metodi topilmadi")
+            except Exception as e:
+                logger.error(f"new_order qo'ng'iroq xatosi: {e}")
+
+        asyncio.create_task(_enqueue())
+
+        return self._json({
+            "ok": True,
+            "event": "new_order",
+            "action": "queued",
+            "phone": phone,
+            "business_id": business_id,
+            "order_count": order_count,
+        })
+
+    async def _handle_call_now(self, body: dict):
+        """call_now eventi — belgilangan raqamga darhol qo'ng'iroq"""
+        phone = str(body.get("phone", "")).strip()
+        if not phone:
+            return self._json({"ok": False, "error": "phone maydoni kerak"}, status=400)
+
+        # Faqat raqam va + belgisi
+        clean = re.sub(r"[^\d+]", "", phone)
+        if len(clean) < 7:
+            return self._json({"ok": False, "error": "Telefon raqami noto'g'ri"}, status=400)
+
+        ad = self.autodialer
+        if not ad:
+            return self._json({"ok": False, "error": "Autodialer servis mavjud emas"}, status=503)
+
+        message_uz = str(body.get("message_uz", "")).strip()
+        message_ru = str(body.get("message_ru", "")).strip()
+
+        logger.info(f"Inbound webhook call_now: phone={clean}")
+
+        async def _call():
+            try:
+                # TTS — xabar berilsa yangi audio, bo'lmasa standart
+                if message_uz or message_ru and hasattr(ad, 'tts'):
+                    from services.tts_service import TTSService
+                    tts: TTSService = ad.tts
+                    if message_uz:
+                        await tts.generate_audio(message_uz, lang="uz",
+                                                  filename=f"webhook_{clean}_uz")
+                    if message_ru:
+                        await tts.generate_audio(message_ru, lang="ru",
+                                                  filename=f"webhook_{clean}_ru")
+
+                if hasattr(ad, '_call_business_now'):
+                    await ad._call_business_now(
+                        phone=clean,
+                        business_id=None,
+                        order_count=1,
+                        source="webhook_call_now",
+                    )
+                elif hasattr(ad, 'ami') and ad.ami:
+                    await ad.ami.originate_call(phone=clean)
+            except Exception as e:
+                logger.error(f"call_now xatosi: {e}")
+
+        asyncio.create_task(_call())
+
+        return self._json({
+            "ok": True,
+            "event": "call_now",
+            "action": "initiated",
+            "phone": clean,
+        })
+
+    async def _handle_order_update(self, body: dict):
+        """order_update eventi — buyurtma holati o'zgardi"""
+        business_id = body.get("business_id")
+        order_id = body.get("order_id", "")
+        status = str(body.get("status", "")).strip()
+
+        if not status:
+            return self._json({"ok": False, "error": "status maydoni kerak"}, status=400)
+
+        logger.info(f"Inbound webhook order_update: biz={business_id} order={order_id} status={status}")
+
+        ad = self.autodialer
+        if status.upper() in RESOLVED_ORDER_STATES and ad and hasattr(ad, '_cancel_pending_call'):
+            try:
+                cancelled = await ad._cancel_pending_call(
+                    business_id=business_id,
+                    order_id=str(order_id) if order_id else None,
+                )
+                return self._json({
+                    "ok": True,
+                    "event": "order_update",
+                    "action": "call_cancelled" if cancelled else "no_pending_call",
+                    "status": status,
+                })
+            except Exception as e:
+                logger.error(f"order_update bekor qilish xatosi: {e}")
+
+        return self._json({
+            "ok": True,
+            "event": "order_update",
+            "action": "noted",
+            "status": status,
+        })
+
+    # ===== HEALTH =====
 
     async def health(self, request):
         """Health check"""
