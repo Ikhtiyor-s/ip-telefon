@@ -601,7 +601,21 @@ class NonborService:
 
         result["lead_id"] = order_id
         result["order_number"] = str(order_id)
-        result["price"] = (order.get("total_price", 0) or 0) / 100
+
+        # Narx — eski (int kopeyka, 150000 = 1500 so'm) yoki yangi spec
+        # (decimal string "95000.00" so'mda) formatda kelishi mumkin.
+        raw_price = order.get("total_price")
+        if raw_price is None or raw_price == "":
+            raw_price = order.get("price", 0)
+        try:
+            if isinstance(raw_price, str):
+                # String — so'mda (decimal yoki yaxlit)
+                result["price"] = float(raw_price)
+            else:
+                # Int/float — kopeyka, so'mga o'tkazish
+                result["price"] = float(raw_price or 0) / 100
+        except (TypeError, ValueError):
+            result["price"] = 0
 
         # Biznes (sotuvchi)
         business = order.get("business") or {}
@@ -642,13 +656,23 @@ class NonborService:
         if client_phone and str(client_phone).strip() not in ("None", "null", ""):
             result["client_phone"] = str(client_phone).strip()
 
-        # Mahsulot
-        items = order.get("order_item") or order.get("items") or []
+        # Mahsulot — eski format (order_item + product.name + count) yoki
+        # yangi v2 spec (items + product_name + quantity).
+        items = order.get("items") or order.get("order_item") or []
         if items:
             first_item = items[0]
             product = first_item.get("product") or {}
-            result["product_name"] = product.get("name") or product.get("title", "Noma'lum")
-            result["quantity"] = first_item.get("count", 1)
+            result["product_name"] = (
+                first_item.get("product_name")
+                or product.get("name")
+                or product.get("title")
+                or "Noma'lum"
+            )
+            result["quantity"] = (
+                first_item.get("quantity")
+                or first_item.get("count")
+                or 1
+            )
 
         result["lead_name"] = (
             f"#{order_id} | {result['client_name']} | "
