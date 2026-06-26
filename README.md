@@ -185,7 +185,7 @@ curl -H "X-API-Key: YOUR_KEY" http://localhost:8585/api/autodialer/stats
 
 ```
 docker-compose.yml
-├── autodialer-asterisk     (andrius/asterisk:latest)
+├── autodialer-asterisk     (andrius/asterisk:20.5.0)
 │   ├── network: host
 │   ├── volumes:
 │   │   ├── config/asterisk/*.conf -> /etc/asterisk/ (ro)
