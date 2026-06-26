@@ -1,6 +1,6 @@
 services:
   asterisk:
-    image: andrius/asterisk:20.5.0
+    image: andrius/asterisk:20
     container_name: autodialer-asterisk
     restart: unless-stopped
     networks:
