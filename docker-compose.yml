@@ -1,6 +1,6 @@
 services:
   asterisk:
-    image: andrius/asterisk:latest
+    image: andrius/asterisk:20.5.0
     container_name: autodialer-asterisk
     restart: unless-stopped
     networks:
@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: autodialer-pro:latest
+    pull_policy: build
     container_name: autodialer-pro
     restart: unless-stopped
     networks:
