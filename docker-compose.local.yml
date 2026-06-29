@@ -11,16 +11,16 @@ services:
   # ASTERISK PBX
   # ===========================================================================
   asterisk:
-    image: andrius/asterisk:latest
+    image: andrius/asterisk:20
     container_name: autodialer-asterisk
     restart: unless-stopped
     ports:
-      - "5060:5060/udp"
-      - "5060:5060/tcp"
+      - "5160:5060/udp"
+      - "5160:5060/tcp"
       - "5038:5038"
-      - "10000-10100:10000-10100/udp"
+      - "11000-11100:10000-10100/udp"
     volumes:
-      - ./config/asterisk/pjsip.local.conf:/etc/asterisk/pjsip.conf:ro
+      - ./config/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
       - ./config/asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./config/asterisk/manager.local.conf:/etc/asterisk/manager.conf:ro
       - autodialer-audio:/tmp/autodialer-audio
@@ -44,6 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: autodialer-pro:latest
+    pull_policy: build
     container_name: autodialer-pro
     restart: unless-stopped
     depends_on:

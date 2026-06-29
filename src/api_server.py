@@ -168,6 +168,7 @@ class AutodialerAPI:
         r.add_post("/notify", self.handle_bot_notify)
         # Kiruvchi webhook — tashqi servislardan ma'lumot qabul qilish
         r.add_post("/webhook/inbound", self.handle_inbound_webhook)
+        r.add_post("/webhook/inbound/", self.handle_inbound_webhook)
         r.add_get("/webhook/inbound/ping", self.inbound_webhook_ping)
         # Web panel (static)
         r.add_get("/", self._serve_index)
